@@ -145,12 +145,12 @@ def _metrics(metrics):
             if metrics[key] not in (SOURCES if key == 'source' else OUTCOMES):
                 raise ValueError(key + ': invalid value')
             clean[key] = metrics[key]
-    for key in ('cache_hit', 'teacher_avoided', 'teacher_requested'):
+    for key in ('cache_hit', 'teacher_avoided', 'teacher_requested', 'shadow_sampled'):
         if key in metrics:
             if type(metrics[key]) is not bool:
                 raise ValueError(key + ': boolean required')
             clean[key] = metrics[key]
-    for key in ('latency_ms', 'input_tokens', 'output_tokens', 'reasoning_tokens', 'task_input_tokens', 'task_output_tokens'):
+    for key in ('latency_ms', 'task_latency_ms', 'input_tokens', 'output_tokens', 'reasoning_tokens', 'task_input_tokens', 'task_output_tokens'):
         if key in metrics:
             clean[key] = None if metrics[key] is None else _number(metrics[key], key)
     return clean
@@ -210,17 +210,124 @@ def _derive(db, obs):
     return {'rule_id': rid, 'state': state, 'train_units': train, 'holdout_units': holdout, 'conflict': conflict}
 
 
+def _receipt(db, ph, project, row):
+    """Validate stored execution evidence, never self-reported completion alone."""
+    from crews.omp_adapter import scope_path, validate_model
+    if row['status'] != 'completed':
+        raise ValueError('feedback requires completed receipt')
+    plan = json.loads(row['plan'])
+    found = [(w, c) for w in plan['waves'] for c in w['calls'] if c['role_id'] == row['role']]
+    if len(found) != 1:
+        raise ValueError('feedback role missing or ambiguous')
+    wave, cell = found[0]
+    if cell.get('policy_combo') != 'Small':
+        raise ValueError('feedback requires Small Combo receipt')
+    validate_model(cell, _root())
+    result = json.loads(row['result'] or '{}')
+    native, wire = result.get('native') or {}, result.get('wire') or {}
+    evidence = result.get('verification')
+    if (result.get('status') != 'COMPLETE' or result.get('failure_kind') or
+            type(native.get('exitCode')) is not int or native['exitCode'] != 0 or
+            native.get('error') or native.get('aborted') or
+            not isinstance(evidence, list) or not evidence or
+            any(not isinstance(v, str) or not v.strip() for v in evidence)):
+        raise ValueError('feedback requires valid native exit 0 and verified completion')
+    if (wire.get('model') != cell['model'] or wire.get('effort') != cell['reasoning_effort'] or
+            wire.get('provider') != cell['provider'] or
+            native.get('resolvedThinkingLevel', cell['reasoning_effort']) != cell['reasoning_effort'] or
+            native.get('resolvedModel', cell['model']) not in (cell['model'], cell['provider'] + '/' + cell['model'])):
+        raise ValueError('feedback model/effort receipt mismatch')
+    fingerprints = result.get('fingerprints')
+    scopes = set(cell.get('write_scope', []) + cell.get('read_scope', []))
+    if not isinstance(fingerprints, dict) or set(fingerprints) != scopes:
+        raise ValueError('feedback missing scope fingerprints')
+    for name, expected in fingerprints.items():
+        scope_path(project, name)
+        target = Path(project) / name
+        actual = hashlib.sha256(target.read_bytes()).hexdigest() if target.is_file() else None
+        if actual != expected:
+            raise ValueError('feedback evidence stale: ' + name)
+    oid = cell.get('classification', {}).get('learning', {}).get('observation_id')
+    obs = _observation(db, ph, oid)
+    if json.loads(obs['metrics']).get('source') not in SOURCES - {'learned'}:
+        raise ValueError('feedback requires original nonlearned observation')
+    safe = json.loads(obs['safe_role'])
+    answers = cell.get('role_answers', {})
+    if (safe['kind'] != wave['kind'] or safe['facts'] != ClassificationFacts.model_validate(cell.get('facts', {})).model_dump() or
+            safe['answers'] != {k: answers[k] for k in ('divisible', 'specific') if k in answers}):
+        raise ValueError('feedback observation provenance mismatch')
+    _proposal(safe, {k: answers.get(k) for k in ('need', 'difficulty')})
+    declared = cell.get('declared_role_answers', answers)
+    return {'observation_id': oid, 'run': row['run'], 'role': row['role'], 'session': row['session'],
+            'declared_need': declared.get('need'), 'declared_difficulty': declared.get('difficulty')}
+
+
+def _feedback_receipts(db, ph, project, p, options=False):
+    from crews.omp_adapter import canonical
+    project = canonical(project)
+    target = _root() / 'runs.sqlite'
+    if not target.is_file():
+        if options:
+            return []
+        raise ValueError('feedback run not found in project')
+    runs = sqlite3.connect(target.resolve().as_uri() + '?mode=ro', uri=True)
+    runs.row_factory = sqlite3.Row
+    try:
+        query = ('SELECT r.id run,r.session,r.plan,c.role,c.status,c.result FROM runs r '
+                 'JOIN calls c ON c.run=r.id WHERE r.project=?')
+        params = [project]
+        if not options:
+            query += ' AND r.id=? AND c.role=? AND r.session=?'
+            params += [_text(p.get(k), k) for k in ('run', 'role', 'session')]
+        query += ' ORDER BY r.created DESC,r.id DESC,c.role'
+        rows = runs.execute(query, params)
+        if not options:
+            row = rows.fetchone()
+            if row is None:
+                raise ValueError('feedback run/project/role/session mismatch')
+            return _receipt(db, ph, project, row)
+        limit = p.get('limit', 100)
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError('limit: integer from 1 to 1000 required')
+        eligible = []
+        for row in rows:
+            try:
+                receipt = _receipt(db, ph, project, row)
+            except (ValueError, TypeError, KeyError, OSError):
+                continue
+            if db.execute('SELECT 1 FROM labels WHERE observation_id=?', (receipt['observation_id'],)).fetchone():
+                continue
+            eligible.append(receipt)
+            if len(eligible) == limit:
+                break
+        return eligible
+    finally:
+        runs.close()
+
+
 def _summary(db, project):
     observations = db.execute('SELECT metrics FROM observations WHERE project=?', (project,)).fetchall()
     metrics = [json.loads(r['metrics']) for r in observations]
     resource = {}
-    for key in ('latency_ms', 'input_tokens', 'output_tokens', 'reasoning_tokens', 'task_input_tokens', 'task_output_tokens'):
+    for key in ('latency_ms', 'task_latency_ms', 'input_tokens', 'output_tokens', 'reasoning_tokens', 'task_input_tokens', 'task_output_tokens'):
         known = [m[key] for m in metrics if m.get(key) is not None]
         resource[key] = {'total': sum(known), 'known': len(known), 'unknown': len(metrics) - len(known)}
     labels = db.execute('SELECT l.need,l.difficulty,l.split,o.proposal FROM labels l JOIN observations o ON o.id=l.observation_id WHERE l.project=?', (project,)).fetchall()
     scored = [r for r in labels if r['proposal'] is not None]
     correct = sum(json.loads(r['proposal']) == {'need': r['need'], 'difficulty': r['difficulty']} for r in scored)
+    by_source, by_outcome, by_source_outcome = {}, {}, {}
+    for m in metrics:
+        source, outcome = m.get('source', 'unknown'), m.get('outcome', 'pending')
+        by_source[source] = by_source.get(source, 0) + 1
+        by_outcome[outcome] = by_outcome.get(outcome, 0) + 1
+        bucket = by_source_outcome.setdefault(source, {})
+        bucket[outcome] = bucket.get(outcome, 0) + 1
     return {'mode': _mode(db, project), 'observations': len(metrics), 'labels': len(labels),
+            'by_source': by_source, 'by_outcome': by_outcome, 'by_source_outcome': by_source_outcome,
+            'pending_outcomes': by_outcome.get('pending', 0), 'unknown_outcomes': by_outcome.get('unknown', 0),
+            'teacher_requests': sum(m.get('teacher_requested', m.get('source') == 'teacher') is True for m in metrics),
+            'teacher_cache_hits': sum(m.get('source') == 'teacher' and m.get('cache_hit') is True for m in metrics),
+            'shadow_samples': sum(m.get('shadow_sampled') is True for m in metrics),
             'label_accuracy': {'correct': correct, 'scored': len(scored), 'unknown': len(labels) - len(scored),
                                'accuracy': correct / len(scored) if scored else None},
             'teacher_calls_observed': sum(m.get('source') == 'teacher' and m.get('teacher_requested', True) and not m.get('cache_hit', False) for m in metrics),
@@ -236,7 +343,7 @@ def dispatch(request, project=None):
         raise ValueError('learning request: object required')
     op = request.get('operation', request.get('op'))
     if op not in {'observe', 'lookup', 'label', 'activate', 'rollback', 'audit', 'outcome', 'status',
-                  'report', 'rules', 'observations', 'configure', 'purge'}:
+                  'report', 'rules', 'observations', 'configure', 'purge', 'feedback', 'feedback_options'}:
         raise ValueError('learning operation: invalid name')
     project = _text(project if project is not None else request.get('project'), 'project')
     root = _root()
@@ -255,6 +362,14 @@ def dispatch(request, project=None):
 
 
 def _dispatch(db, key, project, ph, op, p):
+    if op == 'feedback_options':
+        return {'feedback_options': _feedback_receipts(db, ph, project, p, options=True)}
+    if op == 'feedback':
+        if 'verified_small' in p and p['verified_small'] is not True:
+            raise ValueError('verified_small: true required when supplied')
+        receipt = _feedback_receipts(db, ph, project, p)
+        result = _dispatch(db, key, project, ph, 'label', {**p, 'observation_id': receipt['observation_id']})
+        return {**receipt, **result}
     if op == 'configure':
         mode = p.get('mode')
         if mode == 'enabled':

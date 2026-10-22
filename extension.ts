@@ -10,6 +10,8 @@ import {completeSimple} from '@oh-my-pi/pi-ai';
 import {editCombos} from './combo-editor.mjs';
 import {classifyAdaptive} from './adaptive-classifier.mjs';
 import {manageLearning} from './learning-editor.mjs';
+import {sessionRoutingReport} from './routing-evidence.mjs';
+import {admittedWrite} from './write-scope.mjs';
 const base=path.dirname(fileURLToPath(import.meta.url));
 let settings:any;
 try{settings=resolveRuntime(base);}catch{settings=null;}
@@ -38,7 +40,7 @@ export default function(pi:any){
   if((role.answers?.need==null||role.answers?.difficulty==null)&&role.classification!==true)throw Error('Automatic classification requires classification:true; otherwise supply need/difficulty');
   const declared=bridge({op:'classify',role,project:ctx.cwd});
   const result=await classifyAdaptive({role,project:ctx.cwd,session:ctx.sessionManager.getSessionId(),declared,config:loadClassifierConfig(settings.state,declared.classifier_model),classifier,learning:(args:unknown)=>bridge({op:'learning',args,project:ctx.cwd}),revalidate:(value:unknown)=>bridge({op:'classify',role:value,project:ctx.cwd}),signal,context:ctx,preview});
-  routeEvidence(ctx,{path:result.semantic?'classifier':result.outcome==='learned'?'learned-classification':'classification',outcome:result.outcome,observation_id:result.learning?.observation_id,rule_id:result.learning?.rule_id,latencyMs:result.semantic?.latencyMs,cacheHit:result.semantic?.cacheHit,usage:result.semantic?.usage});
+  routeEvidence(ctx,{path:result.semantic?'classifier':result.outcome==='learned'?'learned-classification':'classification',outcome:result.outcome,shadow_sampled:result.shadow_sampled,observation_id:result.learning?.observation_id,rule_id:result.learning?.rule_id,latencyMs:result.semantic?.latencyMs,cacheHit:result.semantic?.cacheHit,usage:result.semantic?.usage});
   return result;
  }
  function routeEvidence(ctx:any,entry:any){pi.appendEntry('crews-routing',{...entry,project:ctx.cwd,time:Date.now()});}
@@ -155,11 +157,12 @@ export default function(pi:any){
   }
   checkConflict(ctx.cwd);if(isChild(ctx)||active)throw Error('Only idle main session dispatches Crews');
   const ref=p.crew;active=bridge({op:'dispatch',run:ref.run,role:ref.role,session:ref.session,project:ctx.cwd});
-  routeEvidence(ctx,{path:'crew',run:ref.run,role:ref.role,model:active.call.model,effort:active.call.reasoning_effort,classification:active.call.role_answers,reason:active.call.routing_reason});
+  routeEvidence(ctx,{path:'crew',run:ref.run,role:ref.role,requested_combo:active.call.requested_combo,effective_combo:active.call.policy_combo,bounded_small:active.call.bounded_small,model:active.call.model,effort:active.call.reasoning_effort,classification:active.call.role_answers,reason:active.call.routing_reason});
   try{
    const projectAgent=path.join(ctx.cwd,'.omp/agents',active.call.agent_type+'.md');
    const managedAgent=path.join(base,'agents',active.call.agent_type+'.md');
    for(const override of [projectAgent,path.join(settings.agentDir,'agents',active.call.agent_type+'.md')])if(fs.existsSync(override)&&fs.readFileSync(override,'utf8')!==fs.readFileSync(managedAgent,'utf8'))throw Error('Project/user shadows managed crew agent; review configuration');
+   const started=performance.now();
    const result=await ctx.invokeTool({context:`Independent role; use only its brief. [crew-ticket:${active.token}]`,tasks:[{agent:active.call.agent_type,task:active.call.prompt,solutionSpace:'Execute the explicit role brief; model and effort come from the admitted plan.',outputSchema:{type:'object',properties:{status:{type:'string',enum:['COMPLETE','PARTIAL','BLOCKED','FAILED']},verification:{type:'array',items:{type:'string'}}},required:['status','verification']},schemaMode:'strict'}]},{signal,onUpdate:update});
    const rows=result.details?.results;
    const row=rows?.[0];const proofPath=path.join(settings.state,'wire',active.token+'.json');
@@ -168,20 +171,21 @@ export default function(pi:any){
    if(!payload){try{payload=JSON.parse(row?.output||'');}catch{}}
    const verified=proof?.model===active.call.model&&proof?.effort===active.call.reasoning_effort;
    const good=verifiedCompletion(row,payload,proof,active.call);
-   bridge({op:'record',run:ref.run,role:ref.role,session:ref.session,project:ctx.cwd,result:{status:good?'COMPLETE':'FAILED',failure_kind:row?.aborted?'cancelled':row?.error?'provider_error':good?null:'task_failed',verification:payload?.verification||['Native result incomplete or missing verified structured evidence'],native:{exitCode:row?.exitCode,resolvedModel:row?.resolvedModel,resolvedThinkingLevel:row?.resolvedThinkingLevel,usage:row?.usage},wire:proof}});
-   routeEvidence(ctx,{path:'crew-result',run:ref.run,role:ref.role,status:good?'COMPLETE':'FAILED',native:{model:row?.resolvedModel,effort:row?.resolvedThinkingLevel,exitCode:row?.exitCode},wire:proof});
+   const durationMs=performance.now()-started;
+   bridge({op:'record',run:ref.run,role:ref.role,session:ref.session,project:ctx.cwd,result:{status:good?'COMPLETE':'FAILED',failure_kind:row?.aborted?'cancelled':row?.error?'provider_error':good?null:'task_failed',verification:payload?.verification||['Native result incomplete or missing verified structured evidence'],native:{exitCode:row?.exitCode,resolvedModel:row?.resolvedModel,resolvedThinkingLevel:row?.resolvedThinkingLevel,usage:row?.usage,durationMs},wire:proof}});
+   routeEvidence(ctx,{path:'crew-result',run:ref.run,role:ref.role,effective_combo:active.call.policy_combo,bounded_small:active.call.bounded_small,status:good?'COMPLETE':'FAILED',native:{model:row?.resolvedModel,effort:row?.resolvedThinkingLevel,exitCode:row?.exitCode,usage:row?.usage,durationMs},wire:proof});
    return result;
   }catch(err){
    try{bridge({op:'record',run:ref.run,role:ref.role,session:ref.session,project:ctx.cwd,result:{status:'FAILED',failure_kind:signal?.aborted?'cancelled':'dispatch_error',verification:['Dispatch cancelled or failed; retry requires explicit repair']}});}catch{}
    throw err;
   }finally{active=null;}
  }});
- pi.registerTool({name:'crew_learning',label:'Verified classification learning',description:'Read-only current-project classification learning status, observations, rules or report. Mutations require explicit user CLI or /crew learning confirmation.',parameters:z.object({operation:z.enum(['status','observations','rules','report'])}),async execute(_id:unknown,input:{operation:string},_signal:unknown,_update:unknown,ctx:any){
+ pi.registerTool({name:'crew_learning',label:'Verified classification learning',description:'Read-only current-project learning status, feedback options, observations, rules or report. Mutations require explicit user CLI or /crew learning confirmation.',parameters:z.object({operation:z.enum(['status','observations','rules','report','feedback_options'])}),async execute(_id:unknown,input:{operation:string},_signal:unknown,_update:unknown,ctx:any){
   if(isChild(ctx))throw Error('Learning administration belongs to main session');
   const value=bridge({op:'learning',args:input,project:ctx.cwd});
   return {content:[{type:'text',text:JSON.stringify(value)}],details:value};
  }});
- pi.registerTool({name:'crew_preview',label:'Crew classification preview',description:'Preview role classification and effective seat without plan, admission or spawn. Optional semantic calls follow classifier.json mode. Operations status/test/history/reload.',parameters:z.object({operation:z.enum(['status','test','history','reload']),role:z.any().optional()}).passthrough(),async execute(_id:any,p:any,signal:any,_update:any,ctx:any){
+ pi.registerTool({name:'crew_preview',label:'Crew classification preview',description:'Preview classification/seat or inspect routing report without admission/spawn. Operations status/test/history/report/reload.',parameters:z.object({operation:z.enum(['status','test','history','report','reload']),role:z.any().optional()}).passthrough(),async execute(_id:any,p:any,signal:any,_update:any,ctx:any){
   if(isChild(ctx))throw Error('Preview is a main-session capability');
   const value=await preview(p.operation,p.role,ctx,signal);
   return {content:[{type:'text',text:JSON.stringify(value)}],details:value};
@@ -191,6 +195,7 @@ export default function(pi:any){
   if(operation==='status')return {config:loadClassifierConfig(settings.state,policy.classifier_model),policy,runtime:{state:settings.state,agentDir:settings.agentDir},mainModelUnchanged:true};
   if(operation==='reload'){loadClassifierConfig(settings.state,policy.classifier_model);classifier.reload();return {reloaded:true,ticketsUnchanged:true};}
   if(operation==='history')return bridge({op:'history',project:ctx.cwd,limit:200});
+  if(operation==='report')return {crews:bridge({op:'routing_report',project:ctx.cwd}),session:sessionRoutingReport(ctx.sessionManager.getBranch(),ctx.cwd)};
   if(operation!=='test'||!role)throw Error('crew test requires canonical role JSON; no task text is converted to authority');
   const result=await classifyRole(role,ctx,signal,true);
   return {classification:result,seat:result.answers?bridge({op:'preview',role:{...role,answers:result.answers},project:ctx.cwd}):null,spawned:false};
@@ -210,7 +215,7 @@ export default function(pi:any){
    }catch(error:unknown){ctx.ui.notify(error instanceof Error?error.message:String(error),'error');}
    return;
   }
-  if(!['status','test','history','reload'].includes(op)){pi.sendUserMessage('Use crew-omp skill and crews-omp MCP to plan and execute this request: '+args);return;}
+  if(!['status','test','history','report','reload'].includes(op)){pi.sendUserMessage('Use crew-omp skill and crews-omp MCP to plan and execute this request: '+args);return;}
   try{const role=op==='test'?JSON.parse(rest.join(' ')):undefined;ctx.ui.notify(JSON.stringify(await preview(op,role,ctx)), 'info');}catch(error:any){ctx.ui.notify(error.message,'error');}
  }});
 }

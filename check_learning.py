@@ -1,6 +1,8 @@
 """Local assert checks; no provider, model, credentials or existing state needed."""
 import copy
 from contextlib import closing
+import hashlib
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -234,6 +236,110 @@ def run(home):
     assert clean['mode'] == 'shadow'
     assert call('rules')['rules'] == []
     assert not (home / 'runs.sqlite').exists()
+    feedback_checks(home, role, proposal, policy, context)
+
+
+def feedback_checks(home, role, proposal, policy, context):
+    from crews import omp_adapter as adapter
+    project = home / 'feedback-project'
+    project.mkdir()
+    project = adapter.canonical(str(project))
+    target = Path(project) / 'artifact.txt'
+    target.write_text('verified content', encoding='utf-8')
+    answers = {**role['answers'], **proposal}
+    effective = {**role, 'answers': answers}
+
+    def call(op, **kw):
+        return l.dispatch({'operation': op, **kw}, project)
+
+    def fixture(name='good', source='teacher', original=role):
+        observed = call('observe', role=original, context_fingerprint=context, policy_version=policy,
+                        proposal=proposal, metrics={'source': source, 'shadow_sampled': True})
+        cell = {**adapter.remap_seat(effective, 'haiku', 'low'), 'role_id': 'check',
+                'role_answers': answers, 'declared_role_answers': answers,
+                'write_scope': [], 'read_scope': ['artifact.txt'], 'facts': copy.deepcopy(original.get('facts', {})),
+                'classification': {'learning': {'observation_id': observed['observation_id']}}}
+        plan = {'waves': [{'kind': role['kind'], 'calls': [cell]}]}
+        result = {'status': 'COMPLETE', 'verification': ['assert artifact verified independently'],
+                  'native': {'exitCode': 0, 'resolvedModel': cell['model'],
+                             'resolvedThinkingLevel': cell['reasoning_effort']},
+                  'wire': {'model': cell['model'], 'effort': cell['reasoning_effort'], 'provider': cell['provider']},
+                  'fingerprints': {'artifact.txt': hashlib.sha256(target.read_bytes()).hexdigest()}}
+        save(name, plan, result)
+        return plan, result, observed['observation_id']
+
+    def save(name, plan, result, status='completed', receipt_project=project):
+        with adapter.database(home) as db:
+            db.execute('INSERT OR REPLACE INTO runs VALUES(?,?,?,?,?)',
+                       (name, receipt_project, 'session', 100, json.dumps(plan)))
+            db.execute('INSERT OR REPLACE INTO calls VALUES(?,?,?,?,?)',
+                       (name, 'check', 'digest', status, json.dumps(result)))
+
+    def feedback(name='good', **kw):
+        return call('feedback', **{'run': name, 'role': 'check', 'session': 'session',
+                    'need': proposal['need'], 'difficulty': proposal['difficulty'], 'evidence': 'human checked actual result',
+                    'unit_id': name, 'split': 'train', **kw})
+
+    assert call('feedback_options')['feedback_options'] == []
+    plan, result, oid = fixture()
+    raw_runs = (home / 'runs.sqlite').read_bytes()
+    labels = call('status')['labels']
+    options = call('feedback_options')['feedback_options']
+    assert options == [{'observation_id': oid, 'run': 'good', 'role': 'check', 'session': 'session',
+                        'declared_need': proposal['need'], 'declared_difficulty': proposal['difficulty']}]
+    assert call('status')['labels'] == labels  # COMPLETE receipt and listing never label.
+    assert (home / 'runs.sqlite').read_bytes() == raw_runs  # Read-only receipt resolution.
+    rejects(lambda: feedback(session='wrong'))
+    rejects(lambda: feedback(verified_small=False))
+    rejects(lambda: feedback(evidence=''))
+    rejects(lambda: feedback(need='everyday_implementation', difficulty=0, split='invalid'))
+    assert feedback(verified_small=True)['accepted']
+    assert call('feedback_options')['feedback_options'] == []
+    with closing(sqlite3.connect(home / 'learning.sqlite')) as db:
+        assert db.execute('SELECT need,difficulty FROM labels WHERE observation_id=?', (oid,)).fetchone() == (proposal['need'], proposal['difficulty'])
+    assert not feedback()['accepted']
+
+    for name, mutate in (
+        ('exit', lambda c, r: r['native'].update(exitCode=1)),
+        ('bool_exit', lambda c, r: r['native'].update(exitCode=False)),
+        ('wire', lambda c, r: r['wire'].update(effort='HIGH')),
+        ('model', lambda c, r: r['native'].update(resolvedModel='other')),
+        ('effort', lambda c, r: r['native'].update(resolvedThinkingLevel='high')),
+        ('provider', lambda c, r: r['wire'].update(provider='other')),
+        ('provider_error', lambda c, r: r.update(failure_kind='provider_error')),
+        ('native_error', lambda c, r: r['native'].update(error='provider error')),
+        ('noobs', lambda c, r: c['classification'].update(learning={})),
+        ('noscope', lambda c, r: r.update(fingerprints={})),
+        ('noverification', lambda c, r: r.update(verification=[])),
+        ('noncomplete', lambda c, r: r.update(status='PARTIAL')),
+        ('notSmall', lambda c, r: c.update(policy_combo='Medium')),
+        ('binding', lambda c, r: c.update(policy_binding='outdated')),
+        ('facts', lambda c, r: c['facts'].update(method_fixed=False)),
+    ):
+        plan, result, _ = fixture(name)
+        plan = copy.deepcopy(plan)
+        mutate(plan['waves'][0]['calls'][0], result)
+        save(name, plan, result)
+        rejects(lambda: feedback(name))
+    plan, result, _ = fixture('uncompleted')
+    save('uncompleted', plan, result, status='admitted')
+    rejects(lambda: feedback('uncompleted'))
+    plan, result, _ = fixture('wrongproject')
+    save('wrongproject', plan, result, receipt_project=project + '-other')
+    rejects(lambda: feedback('wrongproject'))
+    fixture('learned', source='learned')
+    rejects(lambda: feedback('learned'))
+    fixture('unknownfacts', original={**role, 'facts': {}})
+    rejects(lambda: feedback('unknownfacts'))
+    fixture('stale')
+    target.write_text('changed after receipt', encoding='utf-8')
+    rejects(lambda: feedback('stale'))
+    assert call('feedback_options')['feedback_options'] == []
+    rejects(lambda: l.dispatch({'operation': 'feedback_options'}, project + '-missing'))
+    report = call('report')
+    assert report['shadow_samples'] > 0 and report['by_source']['teacher'] > 0
+    assert report['by_source_outcome']['teacher']['pending'] > 0
+    assert report['pending_outcomes'] > 0 and report['resource_coverage']['task_latency_ms']['unknown'] > 0
 
 
 if __name__ == '__main__':

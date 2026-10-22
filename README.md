@@ -59,6 +59,12 @@ In OMP interactive mode, run `/crew combos`: select Small/Medium/Large, enter pr
 
 Each role uses its own need and difficulty, not task-level or sibling classification. `Auto` selects low for difficulty below 1, medium below 2, high otherwise. Explicit effort overrides difficulty for that Combo. Native wire efforts are lowercase. Repair stays in same Combo; escalation moves to next Combo using that Combo's configured effort, or Auto with original role difficulty. Large has no stronger Combo. Escalation requires recorded failure.
 
+### Bounded implementation on Small (0.5.0)
+
+`everyday_implementation` stays its real need but may execute Small when kind is produce, role difficulty <=1.5, scope contains 1–3 explicit files, and `facts` explicitly set targets_fixed/behavior_fixed/scope_bounded/deterministic_check true and behavior_undecided/unknown_cause/consequential_judgment/cross_system/concurrency_sensitive false. Missing facts retain Medium. Supply `bounded_check:{"input":"check.mjs","command":"node check.mjs"}`: checker must exist in inputs outside every writer scope and command must exactly match an admitted command. This checks declared authority/ownership, not semantic correctness of arbitrary checker code. The independent reviewer still owns acceptance. No implicit retry: Small failure requires recorded repair/escalation; target Combo configuration is respected.
+
+`requested_combo` means baseline capability mapping before this optimization; `effective_combo` is the executed Combo. A bounded Medium->Small role retains need everyday_implementation and reports bounded_small=true, including after explicit escalation.
+
 ```text
 crews-omp combo show --json
 crews-omp combo set --provider local-gateway --small-model small-v2 --small-effort Auto --medium-model medium-v2 --medium-effort Low --large-model large-v2 --large-effort High --json
@@ -75,6 +81,7 @@ Policy changes invalidate old plan bindings, including effort-only changes. Crea
 - `/crew test <canonical-role-JSON>`: classification/effective Combo without plan, ticket or child.
 - `/crew history`: project-scoped routing/status without prompts.
 - `/crew reload`: validate config and invalidate cached recommendations, not running tickets.
+- `/crew report`: persisted project crew counts/usage/coverage/escalations plus current-session main/native-task/crew event counts. `crews-omp report --project <project> --json` returns persisted crew-only data. Session event counts are not task counts; unknown usage is not zero cost.
 
 `crew_preview` exposes same operations headlessly. Python MCP `crew_test` is deterministic only. Facts are tri-state true/false/unknown; absence never means false. Declared need/difficulty takes precedence unless safety facts contradict it. Unknown cause or consequential judgment cannot be mislabeled as cheap lookup. File counts do not establish difficulty. [Routing corpus](examples/routing-corpus.json) covers bilingual deterministic cases; [classification source](crews/classification.py) owns rubric.
 
@@ -85,6 +92,8 @@ Canonical `task` intake contains `intake:{spec,answers,session}`. `spec` uses ta
 Classification order is: explicit valid answers, deterministic facts, active verified local rule, then Large teacher for unresolved answers. The teacher proposes need/difficulty only; execution may still use Small. It does not split arbitrary requests into authorized roles: the orchestrator must supply canonical role scope, commands and acceptance.
 
 `<state>/classifier.json` absent uses `recommend`, Large Combo, timeout30000ms and maxTokens512. This is enabled for unresolved `classification:true` roles; it may incur provider requests. `off` disables teacher calls; `shadow` compares without changing effective answers. Explicit/deterministic answers avoid calls except requested shadow comparison. Existing classifier.json is not overwritten: an old Small model override must be removed or updated to current Large identity before enabling. Large Auto uses high; explicit Combo effort is respected. Strict JSON, safety checks and caller answers remain authoritative.
+
+Declared Medium produce roles at difficulty <=1.5 may be sampled for teacher shadow comparison: classifier.json `mediumShadowPercent` defaults10 and `mediumShadowMax` defaults1 per project/session (range0..100 and0..5). Comparison never replaces declared answers. Preview/off mode does not sample. Sampling consumes bounded teacher resources; set either value0 to disable. The in-memory sampler stops adding samples at256 entries rather than evicting budgets and resampling old calls.
 
 The learner is bundled and requires no extra service/dependency beyond plugin setup. Its default is **shadow per project**: observations and validated candidates can accumulate, but rules cannot replace the teacher until you explicitly enable mode on and activate an eligible rule. Same task family/context/policy must match exactly; this is verified experience reuse, not neural fine-tuning or semantic similarity routing.
 
@@ -102,6 +111,8 @@ crews-omp learning configure --project <project> --mode on --yes --json
 crews-omp learning report --project <project> --json
 crews-omp learning rollback --project <project> --id <rule-id> --yes --json
 ```
+
+For receipt-backed feedback use `/crew learning` -> `Verified Small result`, or list `crews-omp learning feedback_options --project <project> --json` then `crews-omp learning feedback --project <project> --run <run> --role <role> --session <session> --need everyday_implementation --difficulty 1 --evidence "independent acceptance verified" --split train --unit-id <independent-id> --yes --json`. Backend checks completed Small receipt, exact model/effort/provider, current policy and fingerprints, and original nonlearned observation; user must still verify capability/correctness. Listing never creates a label. Existing train/holdout thresholds remain unchanged.
 
 At least **3 independent train units plus 2 disjoint holdout units** must agree before activation. `--split holdout` uses distinct unit IDs; do not label five copies of one check as independent evidence. Only human-reviewed classification labels count. Teacher guesses, `COMPLETE`, provider errors, cancellation and timeout never create correctness labels. Label capability/difficulty, not merely whether a model returned an answer. Cheap labels require explicit negative risk facts; unknown cause/security/consequential judgment cannot be learned into a cheap route.
 

@@ -46,6 +46,12 @@ class RoleAnswers(BaseModel):
  specific: Unit | None = None
 
 
+class BoundedCheck(BaseModel):
+ model_config = ConfigDict(extra='forbid')
+ input: Text
+ command: Text
+
+
 class RoleSpec(BaseModel):
  """Canonical role identity and classification; upstream validates execution constraints."""
  model_config = ConfigDict(extra='allow')
@@ -56,6 +62,7 @@ class RoleSpec(BaseModel):
  answers: RoleAnswers
  solution_space: Text | None = None
  facts: ClassificationFacts | None = None
+ bounded_check: BoundedCheck | None = None
  scope: list[Text] = Field(default_factory=list)
  commands: list[Text] = Field(default_factory=list)
  authority: list[Text] | None = None
@@ -167,6 +174,7 @@ def crew_catalog()->dict:
  cat = catalog.load()
  policy=a.model_policy()
  classification_policy={'rubric':RUBRIC,'facts_schema':ClassificationFacts.model_json_schema(),'auto_intake_schema':IntakePlanArguments.model_json_schema()}
+ classification_policy['bounded_implementation']=a.BOUNDED_ROUTE
  return {'combos':policy['combos'],'model_policy':policy,'classifier_model':a.policy()['classifier_model'],'policy_version':policy_version(),'classification_policy':classification_policy,'combo_effort_options':['Low','Medium','High','Auto'],'effort_policy':{'auto':'difficulty: [0,1) low; [1,2) medium; [2,3] high','selection':{'Small':['mechanical_verification','repeatable_task','bounded_retrieval'],'Medium':['everyday_implementation','long_running_agentic'],'Large':['difficult_review','integration_architecture','specialist']}},'needs':list(cat['needs']),'questions':cat['questions'],'kind_columns':{kind:details['column'] for kind,details in cat['kinds'].items()},'thresholds':cat['thresholds'],'minimal_example':minimal_example(),'guard':'native wrapper plus extension checks; not OS sandbox','concurrency':2,'depth':1}
 
 
@@ -199,4 +207,9 @@ def crew_test(role:dict,project:str|None=None)->dict:
 def crew_history(project:str,limit:Annotated[int,Field(strict=True,ge=1,le=200)]=50)->list:
  """Project-scoped recent run/role status and routing only; prompts omitted."""
  return a.history(project,limit)
+@mcp.tool()
+def crew_routing_report(project:str)->dict:
+ """Read-only project routing counts and native usage; no prompts or commands."""
+ return a.routing_report(project)
+
 if __name__=='__main__':mcp.run(transport='stdio')

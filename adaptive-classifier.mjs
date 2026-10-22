@@ -1,5 +1,7 @@
 import {createHash} from 'node:crypto';
 import {contextFingerprint,CLASSIFIER_PROMPT} from './classifier.mjs';
+import {createShadowSampler} from './shadow-sampling.mjs';
+const mediumSampler=createShadowSampler();
 
 export async function classifyAdaptive({role,project,session,declared,config,classifier,learning,revalidate,signal,context,preview=false}) {
  const fingerprint=contextFingerprint(project,role);
@@ -10,14 +12,15 @@ export async function classifyAdaptive({role,project,session,declared,config,cla
  const needsTeacher=!declared.answers;
  const lookup=needsTeacher&&!preview?store({...base,operation:'lookup'}):null;
  const audit=lookup?.match&&lookup.audit_due;
+ const sampled=!preview&&mediumSampler.select(role,declared,project,session,config,fingerprint);
  let semantic=null;
  if(needsTeacher&&lookup?.match&&!audit&&lookup.answers){
   const checked=revalidate({...role,answers:{...role.answers,need:role.answers?.need??lookup.answers.need,difficulty:role.answers?.difficulty??lookup.answers.difficulty}});
   const observation=store({...base,operation:'observe',proposal:{need:checked.answers.need,difficulty:checked.answers.difficulty},metrics:{source:'learned',outcome:'unknown',teacher_avoided:true},rule_id:lookup.rule_id});
   return {...checked,outcome:'learned',learning:{...observation,rule_id:lookup.rule_id},semantic:null};
  }
- if(needsTeacher||config.mode==='shadow'||audit){
-  semantic=await classifier.recommend(role,project,session,declared.policy_version,config,signal,context,Boolean(audit));
+ if(needsTeacher||config.mode==='shadow'||audit||sampled){
+  semantic=await classifier.recommend(role,project,session,declared.policy_version,sampled?{...config,mode:'shadow'}:config,signal,context,Boolean(audit));
  }
  if(audit){
   store({...base,operation:'audit',rule_id:lookup.rule_id,proposal:semantic?.recommendation?{need:semantic.recommendation.need,difficulty:semantic.recommendation.difficulty}:null,outcome:semantic?.recommendation?'ok':semantic?.reason?.includes('timeout')?'timeout':semantic?.reason?.includes('canceled')?'cancelled':'provider_error'});
@@ -34,6 +37,6 @@ export async function classifyAdaptive({role,project,session,declared,config,cla
  const proposal=classified?{need:classified.need,difficulty:classified.difficulty}:null;
  const usage=semantic?.usage;
  const outcome=semantic?.recommendation?'ok':!semantic?'ok':semantic.reason?.includes('timeout')?'timeout':semantic.reason?.includes('canceled')?'cancelled':semantic.outcome==='off'?'unknown':'provider_error';
- const observation=preview?null:store({...base,operation:'observe',proposal,metrics:{source:semantic?'teacher':declared.outcome,outcome,teacher_requested:Boolean(semantic&&semantic.outcome!=='off'),cache_hit:semantic?.cacheHit??false,latency_ms:semantic?.latencyMs??0,input_tokens:usage?.input??usage?.inputTokens??null,output_tokens:usage?.output??usage?.outputTokens??null,reasoning_tokens:usage?.reasoning??usage?.reasoningTokens??null},rule_id:lookup?.rule_id??null});
- return {...effective,semantic,learning:{...observation,unavailable:learningError}};
+ const observation=preview?null:store({...base,operation:'observe',proposal,metrics:{source:semantic?'teacher':declared.outcome,outcome,teacher_requested:Boolean(semantic&&semantic.outcome!=='off'),shadow_sampled:sampled,cache_hit:semantic?.cacheHit??false,latency_ms:semantic?.latencyMs??0,input_tokens:usage?.input??usage?.inputTokens??null,output_tokens:usage?.output??usage?.outputTokens??null,reasoning_tokens:usage?.reasoning??usage?.reasoningTokens??null},rule_id:lookup?.rule_id??null});
+ return {...effective,semantic,shadow_sampled:sampled,learning:{...observation,unavailable:learningError}};
 }

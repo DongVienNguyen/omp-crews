@@ -61,12 +61,16 @@ test('learning commands require project and explicit admin confirmation before r
   const env={...process.env,CREWS_OMP_HOME:state,CREWS_OMP_USER_HOME:temp,OMP_PROFILE:'',PI_PROFILE:''};
   const call=(...args)=>{const result=execute(process.execPath,[path.join(source,'bin/crews-omp.mjs'),'learning',...args,'--json'],env);return {...result,data:JSON.parse(result.stdout)};};
   try {
-    for(const operation of ['status','observations','rules','label','activate','rollback','purge','configure']) {
+    for(const operation of ['status','observations','rules','report','feedback_options','feedback','label','activate','rollback','purge','configure']) {
       const missing=call(operation); assert.equal(missing.status,1); assert.match(missing.data.error,/require --project/);
     }
-    for(const args of [['label'],['activate'],['rollback'],['purge'],['configure','--mode','on']]) {
+    for(const args of [['feedback'],['label'],['activate'],['rollback'],['purge'],['configure','--mode','on']]) {
       const refused=call(...args,'--project',temp); assert.equal(refused.status,1); assert.match(refused.data.error,/requires explicit --yes/);
     }
+    for(const args of [['feedback_options','--run','unexpected'],['feedback','--yes'],['feedback','--yes','false'],['feedback','--yes','--run','run','--role','role','--session','session']]) {
+      const invalid=call(...args,'--project',temp); assert.equal(invalid.status,1); assert.ok(!/Provision isolated runtime/.test(invalid.data.error));
+    }
+    const blank=call('feedback','--project',' ','--yes'); assert.equal(blank.status,1); assert.match(blank.data.error,/require --project/);
     const missingRuntime=call('status','--project',temp); assert.equal(missingRuntime.status,1); assert.match(missingRuntime.data.error,/Provision isolated runtime/);
     assert.ok(!fs.existsSync(state),'confirmation and scope failures must not provision runtime or learning data');
   } finally {fs.rmSync(temp,{recursive:true,force:true});}
@@ -84,6 +88,7 @@ test('learning CLI keeps labels explicit, activation gated and project data priv
   try {
     const initial=call('status'); success(initial); assert.equal(initial.data.mode,'shadow'); assert.equal(initial.data.observations,0); assert.equal(initial.data.labels,0); assert.equal(initial.data.audit_every,10);
     assert.deepEqual(call('observations').data.observations,[]); assert.deepEqual(call('rules').data.rules,[]);
+    const feedbackOptions=call('feedback_options'); success(feedbackOptions); assert.ok(!feedbackOptions.stdout.includes('PRIVATE_TASK_TEXT'));
     const label=(id,split,unit)=>call('label','--id',id,'--need','repeatable_task','--difficulty','0','--evidence','PRIVATE_EVIDENCE','--split',split,'--unit-id',unit,'--yes');
     const first=observe();
     const invalid=label(first,'invalid','unit-0'); assert.equal(invalid.status,1); assert.ok(!invalid.stdout.includes('PRIVATE_EVIDENCE')); assert.equal(call('status').data.labels,0);
@@ -101,6 +106,30 @@ test('learning CLI keeps labels explicit, activation gated and project data priv
     success(call('rollback','--id',rule,'--yes')); assert.equal(call('rules').data.rules[0].state,'rolled_back');
     success(call('configure','--mode','off')); assert.equal(call('status').data.mode,'off');
     success(call('purge','--yes')); assert.equal(call('status').data.observations,0); assert.deepEqual(call('rules').data.rules,[]);
+  } finally {fs.rmSync(temp,{recursive:true,force:true});}
+});
+
+test('routing report requires project and returns only read-only scoped aggregates', () => {
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'crews-report-')); const state=path.join(temp,'state');
+  const env={...process.env,CREWS_OMP_HOME:state,CREWS_OMP_USER_HOME:temp,OMP_PROFILE:'',PI_PROFILE:''};
+  const call=(...args)=>{const result=execute(process.execPath,[path.join(source,'bin/crews-omp.mjs'),'report',...args,'--json'],env);return {...result,data:JSON.parse(result.stdout)};};
+  try {
+    for(const args of [[],['--project',' ']]) {const result=call(...args); assert.equal(result.status,1); assert.match(result.data.error,/require --project/);}
+    assert.equal(call('--project',temp,'--yes').status,1);
+    assert.equal(call('--project',temp,'--project').status,1);
+    const noRuntime=call('--project',temp); assert.equal(noRuntime.status,1); assert.match(noRuntime.data.error,/Provision isolated runtime/);
+    assert.ok(!fs.existsSync(state));
+    const empty=call('--project',temp,'--python',python); assert.equal(empty.status,0,empty.stdout); assert.equal(empty.data.calls,0); assert.deepEqual(empty.data.native_usage,{});
+    assert.ok(!fs.existsSync(state),'report must not create state');
+    const script=`import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom crews import omp_adapter as a\nwith a.database(sys.argv[3]) as db:\n db.execute('INSERT INTO runs VALUES(?,?,?,?,?)',('run',a.canonical(sys.argv[2]),'private session',0,json.dumps({'waves':[{'calls':[{'role_id':'role','requested_combo':'Medium','effective_combo':'Small','prompt':'PRIVATE_PROMPT','classification':{'outcome':'declared'}}]}]})))\n db.execute('INSERT INTO calls VALUES(?,?,?,?,?)',('run','role','private digest','completed',json.dumps({'native':{'usage':{'input':7,'output':2},'durationMs':3},'output':'PRIVATE_OUTPUT'})))\nprint(json.dumps(a.routing_report(sys.argv[2],sys.argv[3])))`;
+    const seeded=execute(python,['-c',script,source,temp,state],env); assert.equal(seeded.status,0,seeded.stderr);
+    const before=fs.readFileSync(path.join(state,'runs.sqlite'));
+    const report=call('--project',temp,'--python',python); assert.equal(report.status,0,report.stdout);
+    assert.deepEqual(report.data,JSON.parse(seeded.stdout)); assert.equal(report.data.calls,1);
+    assert.deepEqual(report.data.native_usage,{input:7,output:2,durationMs:3});
+    assert.ok(!report.stdout.includes('PRIVATE_')); assert.ok(!report.stdout.includes('private session'));
+    assert.deepEqual(fs.readFileSync(path.join(state,'runs.sqlite')),before);
+    assert.equal(call('--project',path.join(temp,'missing'),'--python',python).status,1);
   } finally {fs.rmSync(temp,{recursive:true,force:true});}
 });
 

@@ -25,6 +25,7 @@ try {
   options.json = args.includes('--json');
   if(command === 'help' || command === '--help' || args.includes('--help')) {
     console.log('Usage: crews-omp setup|doctor|combo|learning|migrate|uninstall|rollback [options]\n\nCommands:\n  setup      Provision isolated Python runtime and owned MCP registration\n  doctor     Check native plugin, configured combos, and live MCP handshake\n  combo      Show, set or reset Small, Medium and Large model/effort assignments\n  learning   Inspect and manage project-scoped verified learning\n  migrate    Replace owned legacy discovery after native plugin registration\n  uninstall  Unlink native plugin and remove owned MCP registration; retain state\n  rollback   Restore unchanged migration snapshot and unlink new plugin\n\nOptions:\n  --python PATH          Python 3.12+ executable\n  --agent-dir PATH       Selected OMP agent directory\n  --state-dir PATH       Persistent Crews state directory\n  --profile NAME         Named OMP profile\n  --offline              Install dependencies without package indexes\n  --json                 Machine-readable output\n  --dry-run              Preview migrate, uninstall or rollback\n  --register-plugin      Link native plugin during setup\n  --expected-hashes FILE Ownership hashes for legacy migration\n  --backup DIRECTORY     Migration snapshot for rollback\n\nCombo: combo show|set|reset [--provider ID] [--small-model ID --small-effort Auto|Low|Medium|High] [--medium-model ID --medium-effort Auto|Low|Medium|High] [--large-model ID --large-effort Auto|Low|Medium|High]\nModel changes default to Auto effort when effort is omitted. Combo set imports legacy policy files; reset replaces them with defaults.\n\nLearning (always requires --project PATH):\n  learning status|observations|rules\n  learning label --id OBSERVATION --need NEED --difficulty DIFFICULTY --evidence REFERENCE --split train|holdout --unit-id UNIT --yes\n  learning activate|rollback --id RULE --yes\n  learning purge --yes\n  learning configure --mode off|shadow|on [--yes]\nLabel, activate, rollback and purge require explicit --yes. Mode on also requires --yes. Default mode is shadow; audit interval is fixed at 10. Activation requires 3 train labels, 2 disjoint holdout labels and no conflicts. Setup never enables inference.');
+    console.log('\nReport: report --project PATH (read-only crew routing counts and observed native usage; no prompts)\nLearning: learning report|feedback_options --project PATH\nVerified Small feedback: learning feedback --project PATH --run RUN --role ROLE --session SESSION --need NEED --difficulty DIFFICULTY --evidence REFERENCE --split train|holdout --unit-id UNIT --yes');
     return;
   }
   const action = ['combo','learning'].includes(command) && args[0] && !args[0].startsWith('--') ? args.shift() : command === 'learning' ? 'status' : 'show';
@@ -32,21 +33,22 @@ try {
   const changes = {};
   const valueOptions = {'--python':'python','--agent-dir':'agentDir','--state-dir':'state','--profile':'profile','--expected-hashes':'expectedHashes','--backup':'backup'};
   const switches = {'--json':'json','--offline':'offline','--dry-run':'dryRun','--register-plugin':'registerPlugin'};
-  const learningOptions = {'--project':'project','--id':'id','--need':'need','--difficulty':'difficulty','--evidence':'evidence','--split':'split','--unit-id':'unitId','--mode':'mode'};
+  const learningOptions = {'--project':'project','--id':'id','--need':'need','--difficulty':'difficulty','--evidence':'evidence','--split':'split','--unit-id':'unitId','--mode':'mode','--run':'run','--role':'role','--session':'session'};
   while (args.length) {
     const arg = args.shift();
     if (Object.hasOwn(switches,arg)) options[switches[arg]] = true;
     else if (Object.hasOwn(valueOptions,arg) && args[0] && !args[0].startsWith('--')) options[valueOptions[arg]] = args.shift();
+    else if (command === 'report' && arg === '--project' && args[0] && !args[0].startsWith('--')) options.project = args.shift();
     else if (command === 'learning' && arg === '--yes') options.yes = true;
     else if (command === 'learning' && Object.hasOwn(learningOptions,arg) && args[0] && !args[0].startsWith('--')) options[learningOptions[arg]] = args.shift();
     else if (command === 'combo' && action === 'set' && comboFlags.includes(arg.slice(2)) && arg.startsWith('--') && args[0] && !args[0].startsWith('--')) changes[arg.slice(2)] = args.shift();
     else throw new Error(command === 'learning' ? 'Unknown or incomplete learning argument' : `Unknown or incomplete argument: ${arg}`);
   }
-  if (!['setup', 'doctor', 'combo', 'learning', 'migrate', 'uninstall', 'rollback'].includes(command)) throw new Error('Usage: crews-omp setup|doctor|combo|learning|migrate|uninstall|rollback [options]');
+  if (!['setup', 'doctor', 'combo', 'learning', 'report', 'migrate', 'uninstall', 'rollback'].includes(command)) throw new Error('Usage: crews-omp setup|doctor|combo|learning|report|migrate|uninstall|rollback [options]');
   if (options.profile && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(options.profile)) throw new Error('Invalid profile name');
   if (options.dryRun && !['migrate', 'uninstall', 'rollback'].includes(command)) throw new Error('--dry-run is supported by migrate, uninstall and rollback');
-  const result = command === 'combo' ? combo(action,changes) : command === 'learning' ? learning(action) : main();
-  console.log(options.json ? JSON.stringify(result) : `${result.status}\n${JSON.stringify(result, null, 2)}`);
+  const result = command === 'combo' ? combo(action,changes) : command === 'learning' ? learning(action) : command === 'report' ? routingReport() : main();
+  console.log(options.json ? JSON.stringify(result) : `${result.status || 'routing_report'}\n${JSON.stringify(result, null, 2)}`);
   if (result.ok === false) process.exitCode = 1;
 } catch (error) {
   console[options.json ? 'log' : 'error'](options.json ? JSON.stringify({ok:false, status:'error', command, error:error.message}) : `crews-omp: ${error.message}`);
@@ -185,16 +187,32 @@ function combo(action,changes) {
   const policy=action==='show'?validatePolicy(python,value):savePolicy(python,loc,value);
   return {ok:true,status:action==='show'?'combo':action==='reset'?'combo_reset':'combo_updated',policy};
 }
+function routingReport() {
+  if(!options.project?.trim()) throw new Error('Report commands require --project PATH');
+  const loc = locations();
+  const python = readJSON(loc.runtime).python || options.python;
+  if(!python) throw new Error('Provision isolated runtime with setup before report commands (or pass --python)');
+  const script = String.raw`import json,sys
+sys.path.insert(0,sys.argv[1])
+from crews import omp_adapter as a
+print(json.dumps(a.routing_report(sys.argv[2]),separators=(',',':')))`;
+  const result = spawnSync(python,['-c',script,root,path.resolve(options.project)],{encoding:'utf8',shell:false,windowsHide:true,maxBuffer:1024*1024,env:{...process.env,CREWS_OMP_HOME:loc.state,PYTHONUTF8:'1',PYTHONNOUSERSITE:'1'}});
+  if(result.error || result.status !== 0) throw new Error('Routing report failed; check runtime and project validity');
+  try { return JSON.parse(result.stdout); } catch { throw new Error('Routing report backend returned invalid response'); }
+}
 function learning(operation) {
-  if(!['status','observations','rules','report','label','activate','rollback','purge','configure'].includes(operation)) throw new Error('Usage: crews-omp learning status|observations|rules|report|label|activate|rollback|purge|configure --project PATH [options]');
+  if(!['status','observations','rules','report','feedback','feedback_options','label','activate','rollback','purge','configure'].includes(operation)) throw new Error('Usage: crews-omp learning status|report|feedback_options|feedback|label|activate|rollback|purge|configure --project PATH [options]');
   if(!options.project?.trim()) throw new Error('Learning commands require --project PATH');
   if(operation === 'configure' && !['off','shadow','on'].includes(options.mode)) throw new Error('Learning configure requires --mode off|shadow|on');
-  if((['label','activate','rollback','purge'].includes(operation) || operation === 'configure' && options.mode === 'on') && !options.yes) throw new Error(`Learning ${operation} requires explicit --yes`);
-  const allowed = operation === 'label' ? ['id','need','difficulty','evidence','split','unitId'] : ['activate','rollback'].includes(operation) ? ['id'] : operation === 'configure' ? ['mode'] : [];
-  for(const key of ['id','need','difficulty','evidence','split','unitId','mode']) if(options[key] !== undefined && !allowed.includes(key)) throw new Error(`Unsupported learning ${operation} option: ${key}`);
+  if((['feedback','label','activate','rollback','purge'].includes(operation) || operation === 'configure' && options.mode === 'on') && !options.yes) throw new Error(`Learning ${operation} requires explicit --yes`);
+  const labelFields=['need','difficulty','evidence','split','unitId'];
+  const allowed = operation === 'feedback' ? ['run','role','session',...labelFields] : operation === 'label' ? ['id',...labelFields] : ['activate','rollback'].includes(operation) ? ['id'] : operation === 'configure' ? ['mode'] : [];
+  for(const key of ['id',...labelFields,'mode','run','role','session']) if(options[key] !== undefined && !allowed.includes(key)) throw new Error(`Unsupported learning ${operation} option: ${key}`);
   for(const key of allowed) if(!options[key]?.trim()) throw new Error(`Learning ${operation} requires --${key === 'unitId' ? 'unit-id' : key}`);
   const request = {operation,project:path.resolve(options.project)};
-  if(operation === 'label') Object.assign(request,{observation_id:options.id,need:options.need,difficulty:Number(options.difficulty),evidence:options.evidence,split:options.split,unit_id:options.unitId});
+  if(['label','feedback'].includes(operation)) Object.assign(request,{need:options.need,difficulty:Number(options.difficulty),evidence:options.evidence,split:options.split,unit_id:options.unitId});
+  if(operation==='label')request.observation_id=options.id;
+  if(operation==='feedback')Object.assign(request,{run:options.run,role:options.role,session:options.session,verified_small:true});
   if(['activate','rollback'].includes(operation)) request.rule_id = options.id;
   if(operation === 'configure') request.mode = options.mode;
   const loc = locations();

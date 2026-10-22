@@ -14,10 +14,12 @@ fs.mkdirSync(agentDir,{recursive:true});
 const env={...process.env,HOME:temp,USERPROFILE:temp,CREWS_OMP_USER_HOME:temp,PI_CONFIG_DIR:'.omp',PI_CODING_AGENT_DIR:agentDir,CREWS_OMP_HOME:temp,CREWS_OMP_PYTHON:runtime.python,CREWS_OMP_AGENT_DIR:agentDir,PYTHONUTF8:'1',PYTHONIOENCODING:'utf-8'};
 const requests=[];
 let server;
+const writing=process.argv.includes('--bounded-write');
 try{
  fs.writeFileSync(path.join(temp,'fixture.json'),'{"value":47}\n');
  const script=`import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom omp_server import crew_plan\nrole={'name':'local-fixture-checker','kind':'check','mission':'Read fixture JSON and verify value 47','deliverable':'verdict.json','scope':[],'inputs':['fixture.json'],'criteria':['value equals 47'],'answers':{'need':'mechanical_verification','difficulty':0,'divisible':0,'specific':1}}\na={'need':{'choice':'mechanical_verification','confidence':1,'probabilities':{'mechanical_verification':1}},'difficulty':{'score':0},'divisible':{'noul':0},'needs_verifier':{'noul':1}}\np=crew_plan({'task':'Read fixture and verify value','roles':[role]},a,sys.argv[2],'local-scripted-proof');print(json.dumps({'run':p['run_id'],'role':role['name'],'session':p['session']}))`;
- const plan=spawnSync(runtime.python,['-c',script,root,temp],{env,encoding:'utf8',shell:false});
+ const producerScript=`import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom omp_server import crew_plan\nr={'name':'local-fixture-writer','kind':'produce','mission':'Write answer.json with numeric value47; use independent fixture checker','deliverable':'verdict.json','scope':['answer.json'],'inputs':['fixture.json'],'commands':['node check.mjs'],'bounded_check':{'input':'fixture.json','command':'node check.mjs'},'acceptance':['Written answer equals fixture value47'],'facts':{'targets_fixed':True,'behavior_fixed':True,'scope_bounded':True,'deterministic_check':True,'behavior_undecided':False,'unknown_cause':False,'consequential_judgment':False,'cross_system':False,'concurrency_sensitive':False},'answers':{'need':'everyday_implementation','difficulty':1,'divisible':0,'specific':1}}\na={'need':{'choice':'everyday_implementation','confidence':1,'probabilities':{'everyday_implementation':1}},'difficulty':{'score':1},'divisible':{'noul':0},'needs_verifier':{'noul':0}}\np=crew_plan({'task':'Write answer fixture with bounded behavior','roles':[r]},a,sys.argv[2],'local-scripted-proof');assert p['waves'][0]['calls'][0]['bounded_small'];print(json.dumps({'run':p['run_id'],'role':r['name'],'session':p['session']}))`;
+ const plan=spawnSync(runtime.python,['-c',writing?producerScript:script,root,temp],{env,encoding:'utf8',shell:false});
  assert.equal(plan.status,0,plan.stderr);const ref=JSON.parse(plan.stdout);
  server=http.createServer(async(req,res)=>{
   if(!req.url.endsWith('/chat/completions')){res.writeHead(404);res.end();return;}
@@ -29,7 +31,7 @@ try{
    finish=hasTool?'stop':'tool_calls';
   }else{
    const observed=messages.filter(m=>m.role==='tool').map(m=>JSON.stringify(m.content)).join('');
-   delta=hasTool?{role:'assistant',content:JSON.stringify({status:observed.includes('47')?'COMPLETE':'FAILED',verification:['Observed actual read result with fixture value=47']})}:{role:'assistant',tool_calls:[{index:0,id:'local_read',type:'function',function:{name:'read',arguments:JSON.stringify({i:'Reading local fixture',path:path.join(temp,'fixture.json')})}}]};
+   delta=hasTool?{role:'assistant',content:JSON.stringify({status:'COMPLETE',verification:['Observed actual fixture tool result']})}:{role:'assistant',tool_calls:[{index:0,id:'local_tool',type:'function',function:{name:writing?'write':'read',arguments:JSON.stringify(writing?{i:'Writing scoped fixture',path:path.join(temp,'answer.json'),content:'{"value":47}\n'}:{i:'Reading local fixture',path:path.join(temp,'fixture.json')})}}]};
    finish=hasTool?'stop':'tool_calls';
   }
   const base={id:'local-scripted',object:'chat.completion.chunk',created:Math.floor(Date.now()/1000),model:body.model};
@@ -43,9 +45,10 @@ try{
  let out='',err='';child.stdout.on('data',b=>out+=b);child.stderr.on('data',b=>err+=b);
  const exit=await new Promise((resolve,reject)=>{child.on('error',reject);child.on('exit',resolve);});
  assert.equal(exit,0,err+'\n'+out.slice(-1500));
- const resultScript=`import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom crews import omp_adapter as a\nr=a.results(sys.argv[2],sys.argv[3],'local-scripted-proof')[0]\nassert r['status']=='completed',r\nassert r['result']['wire']['model']=='code-seek' and r['result']['wire']['effort']=='low',r\nprint('verified')`;
+ if(writing)assert.deepEqual(JSON.parse(fs.readFileSync(path.join(temp,'answer.json'),'utf8')),{value:47});
+ const resultScript=`import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom crews import omp_adapter as a\nr=a.results(sys.argv[2],sys.argv[3],'local-scripted-proof')[0]\nassert r['status']=='completed',r\nassert r['result']['wire']['model']=='code-seek' and r['result']['wire']['effort']=='${writing?'medium':'low'}',r\nprint('verified')`;
  const check=spawnSync(runtime.python,['-c',resultScript,root,ref.run,temp],{env,encoding:'utf8',shell:false});assert.equal(check.status,0,check.stderr+'\n'+out.split('\n').filter(l=>/tool_execution_end|error|extension/i.test(l)).join('\n').slice(-10000)+'\n'+err);
  assert.deepEqual(requests.map(r=>r.model),['code-sol','code-seek','code-seek','code-sol']);
- assert.deepEqual(requests.map(r=>r.effort),['high','low','low','high']);
+ assert.deepEqual(requests.map(r=>r.effort),['high',writing?'medium':'low',writing?'medium':'low','high']);
  console.log('PASS: actual OMP agent loop, native task child, real read, strict result, matching wire receipt; local scripted provider only');
 }finally{if(server)await new Promise(resolve=>server.close(resolve));fs.rmSync(temp,{recursive:true,force:true});}
