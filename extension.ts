@@ -7,12 +7,14 @@ import {callBridge} from './bridge-client.mjs';
 import {resolveRuntime} from './runtime-paths.mjs';
 import {Classifier,loadClassifierConfig} from './classifier.mjs';
 import {completeSimple} from '@oh-my-pi/pi-ai';
-import {admittedWrite} from './write-scope.mjs';
 const base=path.dirname(fileURLToPath(import.meta.url));
-const settings=resolveRuntime(base);
-function bridge(input:any){
- return callBridge(settings,base,input);
+let settings:any;
+try{settings=resolveRuntime(base);}catch{settings=null;}
+function requireRuntime(){
+ if(!settings)throw Error('Crews runtime is not provisioned. Run crews-omp setup --python <Python 3.12+ executable>, then restart OMP.');
+ return settings;
 }
+function bridge(input:any){return callBridge(requireRuntime(),base,input);}
 export default function(pi:any){
  const z=pi.zod;let active:any=null,child:any=null,wireOK=false,conflict=false;
  const recovery=createPlanRecovery();let mainReceipt=false;

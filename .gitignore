@@ -1,9 +1,7 @@
-# Ignore runtime/state artifacts, keep plugin source directories.
 __pycache__/
 *.py[cod]
 .venv/
 node_modules/
-pip/
 runtime.json
 classifier.json
 *.sqlite*

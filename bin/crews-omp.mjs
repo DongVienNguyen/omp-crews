@@ -26,6 +26,15 @@ try {
     console.log('Usage: crews-omp setup|doctor|migrate|uninstall|rollback [options]\n\nCommands:\n  setup      Provision isolated Python runtime and owned MCP registration\n  doctor     Check native plugin, model aliases, and live MCP handshake\n  migrate    Replace owned legacy discovery after native plugin registration\n  uninstall  Unlink native plugin and remove owned MCP registration; retain state\n  rollback   Restore unchanged migration snapshot and unlink new plugin\n\nOptions:\n  --python PATH          Python 3.12+ executable\n  --agent-dir PATH       Selected OMP agent directory\n  --state-dir PATH       Persistent Crews state directory\n  --offline              Install dependencies without package indexes\n  --json                 Machine-readable output\n  --dry-run              Inspect migrate/uninstall/rollback without mutation\n  --register-plugin      Explicitly link package using native OMP CLI\n  --expected-hashes FILE  Migration ownership hashes {files:{absolutePath:sha256}}\n  --backup DIRECTORY     Owned migration snapshot for rollback\n  --help                 Show help without provisioning or changing files');
     return;
   }
+  if(command==='policy'){
+    const action=args.shift()||'show';
+    if(!['show','set','reset'].includes(action))throw Error('Usage: crews-omp policy show|set|reset [--provider ID --haiku ID --sonnet ID --opus ID] [--json]');
+    if(args.includes('--json'))options.json=true;
+    const loc=locations();const file=path.join(loc.state,'policy.json');const defaults={provider:'9router',models:{haiku:'code-seek',sonnet:'code-sol',opus:'code-astra'}};const current=readJSON(file,defaults);
+    if(action==='show'){console.log(options.json?JSON.stringify({ok:true,status:'policy',policy:current}):JSON.stringify(current,null,2));return;}
+    if(action==='reset')json(file,defaults);else {const value={provider:current.provider,models:{...current.models}};for(const key of ['provider','haiku','sonnet','opus']){const flag='--'+key;const pos=args.indexOf(flag);if(pos>=0&&args[pos+1])key==='provider'?value.provider=args[pos+1]:value.models[key]=args[pos+1];}json(file,value);}
+    console.log(options.json?JSON.stringify({ok:true,status:'policy_updated',policy:readJSON(file)}):JSON.stringify(readJSON(file),null,2));return;
+  }
   while (args.length) {
     const arg = args.shift();
     if (['--json', '--offline', '--dry-run', '--register-plugin'].includes(arg)) options[{'--json':'json','--offline':'offline','--dry-run':'dryRun','--register-plugin':'registerPlugin'}[arg]] = true;
