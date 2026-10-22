@@ -1,8 +1,6 @@
 ---
-name: crew-research-sol
-description: Crews research, code-sol with planned upstream effort
-model: 9router/code-sol:high
-thinking: high
+name: crew-check-medium
+description: Crews check using the admitted Medium Combo model and effort
 blocking: true
 tools:
 - read

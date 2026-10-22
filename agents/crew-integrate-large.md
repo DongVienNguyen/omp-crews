@@ -1,8 +1,6 @@
 ---
-name: crew-produce-astra
-description: Crews produce, code-astra difficulty-based low/medium/high effort
-model: 9router/code-astra:high
-thinking: high
+name: crew-integrate-large
+description: Crews integrate using the admitted Large Combo model and effort
 blocking: true
 tools:
 - read

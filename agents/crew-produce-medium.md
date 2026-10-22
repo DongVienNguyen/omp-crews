@@ -1,8 +1,6 @@
 ---
-name: crew-produce-sol
-description: Crews produce, code-sol with planned upstream effort
-model: 9router/code-sol:high
-thinking: high
+name: crew-produce-medium
+description: Crews produce using the admitted Medium Combo model and effort
 blocking: true
 tools:
 - read

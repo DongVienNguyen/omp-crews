@@ -1,95 +1,95 @@
 # crews-omp
 
-Portable OMP Crews plugin. Policy-gated planning, per-role classification, native model/effort receipts, scoped tools, stale-artifact refusal, and isolated Python runtime.
+Policy-gated Crews planning, classification and native OMP agents. AgentKit owns workflows; this plugin routes admitted crew roles, not main chat or unrelated native tasks. Plans bind model/effort, scoped tools, exact shell commands and completion receipts.
 
-## Install from Git
+## Requirements
 
-Requires OMP native plugin discovery, Node.js 20+, Python 3.12+, and OMP provider credentials configured separately. Windows x64 is verified; other OS support is unverified.
+- OMP with native `ctx.invokeTool`, `before_subagent_spawn` and provider payload hooks. Unsupported hosts refuse crew dispatch. See [verification evidence](VERIFICATION.md) for host limitations.
+- Node.js 20+ for CLI/stdio launcher; OMP supplies its Bun extension runtime.
+- Python 3.12+ installed explicitly. Setup creates an isolated venv using [locked dependencies](requirements-omp.lock), never system pip or an automatic Python download.
+- Provider credentials configured separately in OMP. Default provider is `9router`, model IDs `code-seek`, `code-sol`, `code-astra`. Each configured model must support its selected effort; `Auto` can request low, medium or high. Doctor checks configured aliases/capabilities. Policy contains IDs only, never credentials.
 
-```text
-omp plugin install https://github.com/DongVienNguyen/omp-crews.git --scope user
-```
+Windows lifecycle has recorded verification. Linux/macOS need equivalent lifecycle validation before claiming support.
 
-If the installed OMP version does not accept Git installation, clone and link the checkout:
+## Install and setup
 
-```text
-git clone https://github.com/DongVienNguyen/omp-crews.git
-omp plugin link <checkout> --scope user
-node <checkout>/bin/crews-omp.mjs setup --python <python.exe> --json
-node <checkout>/bin/crews-omp.mjs doctor --json
-```
-
-Restart OMP after install, migration, upgrade or package changes. Do not also add `extension.ts` manually to `config.yml`; duplicate owners can intercept task spawns twice.
-
-Current OMP rejects direct `.tgz` paths as plugin directories. Extract a tarball into a permanent directory, then run `omp plugin link <extracted>/package --scope user`.
-
-## Lifecycle
+Keep checkout or extracted package at a permanent path:
+Install directly from Git with `omp plugin install https://github.com/DongVienNguyen/omp-crews.git --scope user`, then run the installed package's `crews-omp setup` and `doctor` commands. If the package bin is not on PATH, clone the repository to a permanent directory and use the explicit node commands below. A model provider/login must be configured in OMP; the plugin does not create credentials.
 
 ```text
-crews-omp setup --python <python.exe> --json
-crews-omp doctor --json
-crews-omp migrate --dry-run --json
-crews-omp migrate --json
-crews-omp rollback --backup <state>/backups/<snapshot> --dry-run --json
-crews-omp uninstall --dry-run --json
-crews-omp uninstall --json
+omp plugin link <absolute-package-root> --scope user
+node <absolute-package-root>/bin/crews-omp.mjs setup --python <Python-executable> --json
+node <absolute-package-root>/bin/crews-omp.mjs doctor --json
 ```
 
-Setup provisions an isolated locked Python runtime. It never copies credentials, installs into system Python, or downloads Python implicitly. Migration requires the package linked to the active OMP scope and removes only owner-verified legacy registrations. Modified or unknown files refuse migration. Rollback validates owner/profile/hashes and refuses changed files. Uninstall retains state, history, policy and credentials; it removes only owner-marked registration. `--offline` requires an existing valid runtime or `CREWS_OMP_WHEELHOUSE`.
+For a local `.tgz`, extract it and link extracted `package/` directory. Direct tarball installation is not supported on the recorded OMP host. Do not also add extension manually to config.yml: duplicate roots can install competing task wrappers. Restart OMP after package changes, especially on Windows.
 
-## Model and effort policy
+Setup is explicit and idempotent: it provisions private runtime and owner-marked MCP registration. No install/update runs on startup. `--register-plugin` asks CLI to link package through OMP. `--offline` requires valid existing runtime or dependency wheels via `CREWS_OMP_WHEELHOUSE`; missing dependencies fail visibly.
 
-Edit active state `policy.json`; no credentials belong in this file:
+Shared target options are `--python PATH`, `--agent-dir PATH`, `--state-dir PATH`, `--profile NAME` and `--json`. Use CLI `--help` for current flags. `CREWS_OMP_HOME` and `CREWS_OMP_AGENT_DIR` support isolated state and agent roots; choose same profile/paths for setup, doctor and later lifecycle operations. Do not accidentally share profile credentials/state. Relative OMP `PI_CONFIG_DIR` resolves against home, not current directory.
 
-```json
-{
-  "provider": "9router",
-  "models": {
-    "haiku": "code-seek",
-    "sonnet": "code-sol",
-    "opus": "code-astra"
-  }
-}
-```
+## Existing installs, upgrades and removal
 
-Validated effort bands remain policy-controlled:
+Legacy extension installs require migration after linking exact package root:
 
 ```text
-Sonnet/Low    -> Seek/High
-Sonnet/Medium -> Sol/Low
-Sonnet/High   -> Sol/Medium
-Sonnet/XHigh  -> Sol/High
-Sonnet/Max    -> Sol/XHigh
-Haiku         -> Seek/High
-Astra         -> difficulty Low/Medium/High
+node <package-root>/bin/crews-omp.mjs migrate --dry-run --python <Python-executable> --json
+node <package-root>/bin/crews-omp.mjs migrate --python <Python-executable> --json
+node <package-root>/bin/crews-omp.mjs doctor --json
 ```
 
-Provider/model IDs must be distinct bounded identifiers. Changing policy invalidates old plan bindings; create fresh plans. Main chat model remains unchanged.
+Migration removes only owner-verified old extension/MCP/agents/skill registrations. Unknown modified files are refused rather than overwritten. `--expected-hashes FILE` accepts explicitly reviewed owned hashes (`{"files":{"absolute-path":"sha256"}}`), not blanket force. State, history and retry counters remain; incomplete runs never auto-replay.
 
-## Preview and classification
+For upgrades, update package assets at linked root, rerun `setup` and `doctor`, then restart OMP. Existing policy and records remain. There is no `upgrade` subcommand.
 
-Use `/crew status`, `/crew test <canonical-role-JSON>`, `/crew history`, `/crew reload`, or `crew_preview`. Preview never creates a plan, ticket, child or write authority. Semantic classifier mode is `off` by default; `shadow` and `recommend` are explicit opt-ins with bounded timeout/output/cache. Deterministic facts run first. Missing facts remain unknown; classifier output cannot invent scope, commands, criteria, model or credentials.
+`uninstall --dry-run --json` previews removal; `uninstall --json` removes owned MCP/native registration transactionally while retaining state/config/history and provider credentials. Failed removal restores registration.
 
-Canonical intake requires role name, kind, mission, deliverable, scope, commands, acceptance/criteria, divisible/specificity and explicit classification for unresolved need/difficulty. Intake creates a validated plan; dispatch returned crew references only. Bad plans block ordinary fallback.
+To restore a migration snapshot, inspect `rollback --backup <state>/backups/<snapshot> --dry-run --json`, then repeat without `--dry-run`. Snapshot ownership/profile/hashes and current files are checked; modified content is preserved/refused. Crash-prepared snapshots require explicit recovery. Older snapshots without current manifest schema require reviewed manual restoration. No automatic downgrade, data reset or venv pruning.
 
-## Development and verification
+`--dry-run` is supported only by `migrate`, `uninstall`, `rollback`; `rollback` requires `--backup DIRECTORY`. Lifecycle implementation and complete option parser live in [CLI](bin/crews-omp.mjs).
+
+## Combo model and effort policy
+
+Three user-facing Combos each select a model ID and `Low`, `Medium`, `High` or `Auto` (default). Model names remain provider IDs; changing them does not rename Combo slots. Different Combos may use same model. See [canonical policy example](examples/policy.json).
+In OMP interactive mode, run `/crew combos`: select Small/Medium/Large, enter provider/model, choose Auto/Low/Medium/High, review and confirm. Escape cancels without writing. Empty provider/model entry keeps the current value. The editor checks OMP model/effort resolution before saving. Headless users use the CLI below.
+
+- **Small:** mechanical verification, repeatable tasks, bounded retrieval.
+- **Medium:** everyday implementation, long-running agentic work.
+- **Large:** difficult review, integration architecture, specialist work.
+
+Each role uses its own need and difficulty, not task-level or sibling classification. `Auto` selects low for difficulty below 1, medium below 2, high otherwise. Explicit effort overrides difficulty for that Combo. Native wire efforts are lowercase. Repair stays in same Combo; escalation moves to next Combo using that Combo's configured effort, or Auto with original role difficulty. Large has no stronger Combo. Escalation requires recorded failure.
 
 ```text
-npm.cmd pack --dry-run --json
-node --test tests/packaging.test.mjs
+crews-omp combo show --json
+crews-omp combo set --provider local-gateway --small-model small-v2 --small-effort Auto --medium-model medium-v2 --medium-effort Low --large-model large-v2 --large-effort High --json
+crews-omp combo reset --json
 ```
 
-Package assets exclude runtime state, credentials, SQLite files, backups, model config and personal paths. `VERIFICATION.md` records actual checks and limits. `NOTICE` retains upstream licensing attribution.
+Use `node <package-root>/bin/crews-omp.mjs` instead of `crews-omp` when executable is not on PATH. Effort options are case-insensitive. Setting a model without its effort resets that Combo to Auto; untouched Combos retain their settings. Missing policy effort defaults to Auto. Legacy `{provider,models:{haiku,sonnet,opus}}` files remain readable; `combo set` explicitly converts/persists canonical `combos` configuration. `combo reset` writes defaults. Obsolete `policy` command and old model-slot flags are not supported.
 
-No public MCP registry claim, Linux/macOS acceptance, full product acceptance or real-task quality/cost benchmark is implied.
+Policy changes invalidate old plan bindings, including effort-only changes. Create fresh plans after changes. Classifier follows configured Small model and effort (Auto uses classification difficulty 1), not a fixed high effort. Provider authentication remains in OMP.
 
+## Classification and preview
 
-## Model policy commands
+- `/crew status`: classifier config/runtime without inference or child.
+- `/crew test <canonical-role-JSON>`: classification/effective Combo without plan, ticket or child.
+- `/crew history`: project-scoped routing/status without prompts.
+- `/crew reload`: validate config and invalidate cached recommendations, not running tickets.
 
-```text
-crews-omp policy show --json
-crews-omp policy set --provider local-gateway --haiku small-v2 --sonnet medium-v2 --opus large-v2 --json
-crews-omp policy reset --json
-```
+`crew_preview` exposes same operations headlessly. Python MCP `crew_test` is deterministic only. Facts are tri-state true/false/unknown; absence never means false. Declared need/difficulty takes precedence unless safety facts contradict it. Unknown cause or consequential judgment cannot be mislabeled as cheap lookup. File counts do not establish difficulty. [Routing corpus](examples/routing-corpus.json) covers bilingual deterministic cases; [classification source](crews/classification.py) owns rubric.
 
-Policy updates write only state policy.json. Credentials remain in OMP. Create fresh plans after changes; old tickets refuse mismatched policy. Use `/crew status`, `/crew test <role JSON>`, or `crew_preview` for no-spawn preview.
+Canonical `task` intake contains `intake:{spec,answers,session}`. `spec` uses task plus roles with name/kind/mission/deliverable, scope/commands/acceptance and flat role answers. Only `classification:true` may omit need/difficulty; `divisible` and `specific` remain required. [MCP minimal example](omp_server.py) supplies explicit canonical plan shape. Intake returns references, not execution; dispatch each returned `crew:{run,role,session}` through task. It never invents scope, commands, acceptance or model selectors. Invalid/unresolved plans block ordinary delegation rather than falling back silently.
+
+## Optional semantic recommendation
+
+`<state>/classifier.json` absent means off. Modes are `off`, `shadow`, `recommend`; opt-in may incur provider requests. Optional model must match effective classifier identity (default `9router/code-seek:medium` under Auto). See [classifier configuration](classifier.mjs) for timeout/output bounds.
+
+Declared/deterministic answers make no model call. Semantic requests use OMP authentication, bounded role facts, configured Small effort, strict JSON and capped output; no repository dump or credential copy. Errors/timeouts preserve explicit valid answers, otherwise require classification. Shadow never changes routing; recommend fills unresolved need/difficulty only. Cache identity includes project/session, policy and context; stale results are not reused.
+
+## Safety and verification
+
+Extension tool checks are not an OS sandbox; read scope is not a secrets boundary. Exact commands may execute mutable project scripts. Check roles should use trusted narrow commands, not producer-controlled code. Receipts prove requested model/effort and native output, not router backend identity. Stale prior-role fingerprints intentionally refuse admission: reconcile current files and create fresh scoped check, never rewrite historical evidence to PASS.
+
+Run owned offline Python suites with provisioned runtime: `check_classification.py`, `check_plan_contract.py`, `check_effort_policy.py`, `check_seek_routing.py`, `check_bridge_launch.py`. [Package scripts](package.json) own Node packaging checks; `npm run test:packaging` uses isolated lifecycle fixtures. See [verification evidence](VERIFICATION.md) for observed results rather than treating documentation as proof of successful execution.
+
+License MIT. Upstream license retained; [NOTICE](NOTICE) records attribution.

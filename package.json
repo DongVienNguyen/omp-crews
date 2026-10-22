@@ -1,6 +1,6 @@
 {
   "name": "crews-omp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Policy-gated Crews planning and native OMP agents",
   "type": "module",
   "license": "MIT",
@@ -8,7 +8,7 @@
   "bin": { "crews-omp": "./bin/crews-omp.mjs" },
   "files": [
     "bin/*.mjs", "extension.ts", "runtime-paths.mjs", "bridge-client.mjs",
-    "routing-policy.mjs", "result-policy.mjs", "classifier.mjs", "write-scope.mjs",
+    "routing-policy.mjs", "result-policy.mjs", "classifier.mjs", "write-scope.mjs", "combo-editor.mjs",
     "omp_bridge.py", "omp_server.py", "crews/*.py", "crews/*.json",
     "requirements-omp.lock", "legacy-owned.json", "agents/*.md", "skills/crew-omp/SKILL.md", "LICENSE", "NOTICE",
     "examples/*.json", "check_*.py", "check_*.mjs", "tests/*.mjs", "tests/*.ts", "tests/*.json", "tests/*.py", "VERIFICATION.md"

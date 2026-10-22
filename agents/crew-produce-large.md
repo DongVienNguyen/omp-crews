@@ -1,8 +1,6 @@
 ---
-name: crew-check-sol
-description: Crews check, code-sol with planned upstream effort
-model: 9router/code-sol:high
-thinking: high
+name: crew-produce-large
+description: Crews produce using the admitted Large Combo model and effort
 blocking: true
 tools:
 - read
@@ -12,6 +10,8 @@ tools:
 - ls
 - yield
 - bash
+- write
+- edit
 spawns: []
 advisor: false
 prewalk: false

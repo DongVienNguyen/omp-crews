@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {editCombos} from './combo-editor.mjs';
+const snapshot={policy_binding:'v1',model_policy:{provider:'gateway',combos:{Small:{model:'s',effort:'Auto'},Medium:{model:'m',effort:'Auto'},Large:{model:'l',effort:'Auto'}}}};
+const original=structuredClone(snapshot);let saved;
+const selections=['Medium','Low'];const inputs=['gateway','my-model'];
+const result=await editCombos({select:async()=>selections.shift(),input:async()=>inputs.shift(),confirm:async()=>true},snapshot,(policy,binding)=>{saved={policy,binding};return {requires_fresh_plan:true};},()=>true);
+assert.equal(result.saved,true);assert.deepEqual(saved.policy.combos.Medium,{model:'my-model',effort:'Low'});assert.equal(saved.binding,'v1');assert.deepEqual(snapshot,original);
+assert.equal((await editCombos({select:async()=>undefined},snapshot,()=>{throw Error('must not save');},()=>true)).saved,false);
+const s2=['Small','Auto'];const i2=['gateway','missing'];await assert.rejects(()=>editCombos({select:async()=>s2.shift(),input:async()=>i2.shift(),confirm:async()=>true},snapshot,()=>{throw Error('must not save');},()=>false),/Unsupported OMP model/);
+const s3=['Large','High'];const i3=['gateway','large'];await assert.rejects(()=>editCombos({select:async()=>s3.shift(),input:async()=>i3.shift(),confirm:async()=>true},snapshot,()=>{throw Error('Combo policy changed during editing');},()=>true),/changed during editing/);
+console.log('PASS: Combo dialog saves selected values, cancel/unsupported/stale edits preserve state');

@@ -165,18 +165,9 @@ mcp=FastMCP('crews-omp',log_level='ERROR')
 @mcp.tool()
 def crew_catalog()->dict:
  cat = catalog.load()
- seek_first_policy = {
-  'rule': 'Only research roles with need bounded_retrieval and difficulty <= 1 use code-seek/high before upstream seat routing; difficulty 0 alone is not sufficient.',
-  'kind': 'research', 'need': 'bounded_retrieval', 'max_difficulty': 1,
-  'model': 'code-seek', 'reasoning_effort': 'high',
-  'excluded_kinds': [kind for kind in cat['kinds'] if kind != 'research'],
-  'excluded_needs': [need for need in cat['needs'] if need != 'bounded_retrieval'],
- }
- classification_policy={'rubric':RUBRIC,'facts_schema':ClassificationFacts.model_json_schema(),
-                        'auto_intake_schema':IntakePlanArguments.model_json_schema()}
  policy=a.model_policy()
- classifier_model=policy['provider']+'/'+policy['models']['haiku']+':high'
- return {'models':a.MODELS,'model_policy':policy,'classifier_model':classifier_model,'policy_version':policy_version(),'classification_policy':classification_policy,'effort_policy':{'opus':'difficulty: [0,1) low; [1,2) medium; [2,3] high; escalation capped at high','sonnet':'upstream low to Seek/high; medium/high/xhigh/max down one Sol tier','haiku':'fixed code-seek/high'},'seek_first_policy':seek_first_policy,'needs':list(cat['needs']),'questions':cat['questions'],'kind_columns':{kind: details['column'] for kind, details in cat['kinds'].items()},'thresholds':cat['thresholds'],'minimal_example':minimal_example(),'guard':'native wrapper plus extension checks; not OS sandbox','concurrency':2,'depth':1}
+ classification_policy={'rubric':RUBRIC,'facts_schema':ClassificationFacts.model_json_schema(),'auto_intake_schema':IntakePlanArguments.model_json_schema()}
+ return {'combos':policy['combos'],'model_policy':policy,'classifier_model':a.policy()['classifier_model'],'policy_version':policy_version(),'classification_policy':classification_policy,'combo_effort_options':['Low','Medium','High','Auto'],'effort_policy':{'auto':'difficulty: [0,1) low; [1,2) medium; [2,3] high','selection':{'Small':['mechanical_verification','repeatable_task','bounded_retrieval'],'Medium':['everyday_implementation','long_running_agentic'],'Large':['difficult_review','integration_architecture','specialist']}},'needs':list(cat['needs']),'questions':cat['questions'],'kind_columns':{kind:details['column'] for kind,details in cat['kinds'].items()},'thresholds':cat['thresholds'],'minimal_example':minimal_example(),'guard':'native wrapper plus extension checks; not OS sandbox','concurrency':2,'depth':1}
 
 
 @mcp.tool()

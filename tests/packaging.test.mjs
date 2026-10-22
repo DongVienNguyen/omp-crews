@@ -15,6 +15,46 @@ function execute(exe,args,env) {
   assert.ifError(result.error);
   return result;
 }
+test('combo commands validate and persist strict policy', () => {
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'crews-combo-')); const state=path.join(temp,'state');
+  const policyFile=path.join(state,'policy.json');
+  const env={...process.env,CREWS_OMP_HOME:state,CREWS_OMP_USER_HOME:temp,PI_CONFIG_DIR:'.omp',OMP_PROFILE:'',PI_PROFILE:''};
+  const call=(...args)=>{const result=execute(process.execPath,[path.join(source,'bin/crews-omp.mjs'),...args,'--python',python,'--json'],env);let data;try{data=JSON.parse(result.stdout);}catch{assert.fail(result.stdout+result.stderr);}return {...result,data};};
+  try {
+    const shown=call('combo','show'); assert.equal(shown.status,0,shown.stdout); assert.equal(shown.data.policy.combos.Small.effort,'Auto');
+    assert.ok(!fs.existsSync(state),'show must not create policy or runtime state');
+    const changed=call('combo','set','--provider','custom','--small-model','shared','--small-effort','low','--medium-model','balanced','--medium-effort','mEdIuM','--large-model','shared','--large-effort','HIGH');
+    assert.equal(changed.status,0,changed.stdout); assert.equal(changed.data.policy.provider,'custom'); assert.equal(changed.data.policy.combos.Small.effort,'Low'); assert.equal(changed.data.policy.combos.Medium.effort,'Medium'); assert.equal(changed.data.policy.combos.Large.effort,'High');
+    assert.equal(changed.data.policy.combos.Small.model,changed.data.policy.combos.Large.model,'combo models may be reused');
+    assert.deepEqual(JSON.parse(fs.readFileSync(policyFile)),changed.data.policy);
+    const auto=call('combo','set','--small-model','new-fast'); assert.equal(auto.status,0,auto.stdout);
+    assert.equal(auto.data.policy.combos.Small.effort,'Auto'); assert.equal(auto.data.policy.combos.Large.effort,'High');
+    const persisted=fs.readFileSync(policyFile);
+    for(const args of [['combo','set','--small-effort','Turbo'],['combo','set','--small-model'],['combo','show','--provider','bad'],['policy','show'],['combo','set','--haiku','old']]) {
+      const invalid=call(...args); assert.equal(invalid.status,1,invalid.stdout); assert.deepEqual(fs.readFileSync(policyFile),persisted);
+    }
+    assert.deepEqual(fs.readdirSync(state).filter(name=>!['runs.sqlite','runs.sqlite-wal','runs.sqlite-shm'].includes(name)),['policy.json'],'serialized atomic policy writes leave no temporary files');
+    fs.writeFileSync(policyFile,JSON.stringify({...auto.data.policy,unexpected:true})); const invalidFile=call('combo','show'); assert.equal(invalidFile.status,1); assert.match(invalidFile.data.error,/Invalid combo policy/);
+    const corrupt=fs.readFileSync(policyFile); assert.equal(call('combo','set','--provider','other').status,1); assert.deepEqual(fs.readFileSync(policyFile),corrupt);
+    const legacy={provider:'legacy',models:{haiku:'legacy-fast',sonnet:'legacy-balanced',opus:'legacy-deep'}};
+    fs.writeFileSync(policyFile,JSON.stringify(legacy)); assert.equal(call('combo','show').status,1); assert.deepEqual(JSON.parse(fs.readFileSync(policyFile)),legacy);
+    const imported=call('combo','set','--large-effort','high'); assert.equal(imported.status,0,imported.stdout);
+    assert.deepEqual(imported.data.policy,{provider:'legacy',combos:{Small:{model:'legacy-fast',effort:'Auto'},Medium:{model:'legacy-balanced',effort:'Auto'},Large:{model:'legacy-deep',effort:'High'}}});
+    assert.deepEqual(JSON.parse(fs.readFileSync(policyFile)),imported.data.policy);
+    fs.writeFileSync(policyFile,'invalid json');
+    const reset=call('combo','reset'); assert.equal(reset.status,0,reset.stdout); assert.deepEqual(reset.data.policy,shown.data.policy);
+    assert.deepEqual(JSON.parse(fs.readFileSync(policyFile)),shown.data.policy);
+    const selected=path.join(temp,'selected-state');
+    const explicit=call('combo','set','--state-dir',selected,'--provider','selected'); assert.equal(explicit.status,0,explicit.stdout);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(selected,'policy.json'))).provider,'selected');
+    assert.deepEqual(JSON.parse(fs.readFileSync(policyFile)),shown.data.policy);
+    delete env.CREWS_OMP_HOME;
+    const profile=call('combo','set','--profile','work','--provider','profile'); assert.equal(profile.status,0,profile.stdout);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(temp,'.omp/profiles/work/crews-omp/policy.json'))).provider,'profile');
+    assert.equal(call('combo','show','--profile','../escape').status,1);
+  } finally {fs.rmSync(temp,{recursive:true,force:true});}
+});
+
 test('path matching follows platform case rules', () => {
   assert.equal(samePath('/Crews/Package','/crews/package'),process.platform==='win32');
   assert.ok(samePath(source,path.join(source,'.')));
@@ -88,8 +128,19 @@ test('real venv setup, repeat, relocate, doctor, migration rollback, uninstall a
     assert.equal(inventory.status,0,inventory.stderr);
     const entries=JSON.parse(inventory.stdout);
     assert.deepEqual(entries.npm,[], 'PI_CONFIG_DIR must isolate native plugins before any link');
-    fs.writeFileSync(path.join(agent,'models.yml'),'providers:\n  9router:\n    apiKey: NEVER_PRINT_THIS_SECRET\n    models:\n      - id: code-seek\n        thinking: {efforts: [high]}\n      - id: code-sol\n        thinking: {efforts: [low, medium, high, xhigh]}\n      - id: code-astra\n        thinking: {efforts: [low, medium, high]}\n');
-    const models=fs.readFileSync(path.join(agent,'models.yml'));
+    const modelYaml=String.raw`providers:
+  9router:
+    apiKey: NEVER_PRINT_THIS_SECRET
+    models:
+      - id: code-seek
+        thinking: {efforts: [low, medium, high]}
+      - id: code-sol
+        thinking: {efforts: [low, medium, high]}
+      - id: code-astra
+        thinking: {efforts: [low, medium, high]}
+`;
+    fs.writeFileSync(path.join(agent,'models.yml'),modelYaml);
+    const models=Buffer.from(modelYaml);
     const setup=cli('setup');
     assert.equal(setup.status,0,JSON.stringify(setup.data));
     const runtime=JSON.parse(fs.readFileSync(path.join(state,'runtime.json')));
@@ -108,9 +159,9 @@ test('real venv setup, repeat, relocate, doctor, migration rollback, uninstall a
     success(cli('doctor'));
     assert.ok(!cli('doctor').stdout.includes('NEVER_PRINT_THIS_SECRET'));
     const policyFile=path.join(state,'policy.json');
-    const policy={provider:'custom-router',models:{haiku:'fast',sonnet:'balanced',opus:'deep'}};
+    const policy={provider:'custom-router',combos:{Small:{model:'fast',effort:'Auto'},Medium:{model:'balanced',effort:'Low'},Large:{model:'deep',effort:'High'}}};
+    const customModels=Buffer.from('providers:\n  custom-router:\n    apiKey: NEVER_PRINT_THIS_SECRET\n    models:\n      - id: fast\n        thinking: {efforts: [low, medium, high]}\n      - id: balanced\n        thinking: {efforts: [low, medium, high]}\n      - id: deep\n        thinking: {efforts: [low, medium, high]}\n');
     fs.writeFileSync(policyFile,JSON.stringify(policy));
-    const customModels=Buffer.from('providers:\n  custom-router:\n    apiKey: NEVER_PRINT_THIS_SECRET\n    models:\n      - id: fast\n        thinking: {efforts: [high]}\n      - id: balanced\n        thinking: {efforts: [low, medium, high, xhigh]}\n      - id: deep\n        thinking: {efforts: [low, medium, high]}\n');
     fs.writeFileSync(path.join(agent,'models.yml'),customModels);
     const customDoctor=cli('doctor');
     success(customDoctor);
@@ -118,6 +169,22 @@ test('real venv setup, repeat, relocate, doctor, migration rollback, uninstall a
     assert.ok(!customDoctor.stdout.includes('NEVER_PRINT_THIS_SECRET'));
     assert.deepEqual(fs.readFileSync(path.join(agent,'models.yml')),customModels);
     assert.deepEqual(JSON.parse(fs.readFileSync(policyFile)),policy);
+    assert.deepEqual(customDoctor.data.aliases['custom-router/balanced'].requiredEfforts,['low']);
+    assert.deepEqual(customDoctor.data.aliases['custom-router/deep'].requiredEfforts,['high']);
+    assert.deepEqual(customDoctor.data.aliases['custom-router/fast'].requiredEfforts,['low','medium','high']);
+    const sharedPolicy={provider:'custom-router',combos:{Small:{model:'shared',effort:'Low'},Medium:{model:'shared',effort:'High'},Large:{model:'shared',effort:'Low'}}};
+    fs.writeFileSync(policyFile,JSON.stringify(sharedPolicy));
+    fs.writeFileSync(path.join(agent,'models.yml'),'providers:\n  custom-router:\n    models:\n      - id: shared\n        thinking: {efforts: [low, high]}\n');
+    const sharedDoctor=cli('doctor'); success(sharedDoctor);
+    assert.deepEqual(Object.keys(sharedDoctor.data.aliases),['custom-router/shared']);
+    assert.deepEqual(sharedDoctor.data.aliases['custom-router/shared'].combos,['Small','Medium','Large']);
+    assert.deepEqual(sharedDoctor.data.aliases['custom-router/shared'].requiredEfforts,['low','high']);
+    assert.deepEqual(sharedDoctor.data.aliases['custom-router/shared'].missingEfforts,[]);
+    sharedPolicy.combos.Medium.effort='Auto'; fs.writeFileSync(policyFile,JSON.stringify(sharedPolicy));
+    const missingAuto=cli('doctor'); assert.equal(missingAuto.status,1);
+    assert.deepEqual(missingAuto.data.aliases['custom-router/shared'].missingEfforts,['medium']);
+    fs.writeFileSync(policyFile,JSON.stringify(policy));
+    fs.writeFileSync(path.join(agent,'models.yml'),customModels);
     fs.writeFileSync(policyFile,JSON.stringify({...policy,unexpected:'NEVER_PRINT_THIS_SECRET'}));
     const invalidPolicy=cli('doctor');
     assert.equal(invalidPolicy.status,1);
@@ -188,13 +255,14 @@ test('real venv setup, repeat, relocate, doctor, migration rollback, uninstall a
     const oldPython=JSON.parse(fs.readFileSync(path.join(state,'runtime.json'))).python;
     const packageFile=path.join(pkg,'package.json');
     const upgraded=JSON.parse(fs.readFileSync(packageFile));
-    upgraded.version='0.2.1';fs.writeFileSync(packageFile,JSON.stringify(upgraded));
+    const nextVersion=upgraded.version.split('.').map((value,index)=>index===2?Number(value)+1:Number(value)).join('.');
+    upgraded.version=nextVersion;fs.writeFileSync(packageFile,JSON.stringify(upgraded));
     const defaultPolicy={provider:'9router',models:{haiku:'code-seek',sonnet:'code-sol',opus:'code-astra'}};
     fs.writeFileSync(policyFile,JSON.stringify(defaultPolicy));
     success(cli('setup'));
     const newPython=JSON.parse(fs.readFileSync(path.join(state,'runtime.json'))).python;
     assert.notEqual(newPython,oldPython);
-    assert.ok(newPython.includes('0.2.1-py'));
+    assert.ok(newPython.includes(`${nextVersion}-py`));
     assert.ok(fs.existsSync(oldPython));
     assert.deepEqual(JSON.parse(fs.readFileSync(policyFile)),defaultPolicy);
     assert.equal(fs.readFileSync(path.join(state,'run-counter.json'),'utf8'),'{"runs":73}');

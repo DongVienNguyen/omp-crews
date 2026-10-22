@@ -10,7 +10,7 @@ export function loadClassifierConfig(state, expectedModel=DEFAULT_CLASSIFIER.mod
  const file=path.join(state,'classifier.json');
  const raw=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):{};
  const config={...DEFAULT_CLASSIFIER,model:expectedModel,...raw};
- if(!['off','shadow','recommend'].includes(config.mode)||config.model!==expectedModel||!Number.isInteger(config.timeoutMs)||config.timeoutMs<1||config.timeoutMs>30000||!Number.isInteger(config.maxTokens)||config.maxTokens<64||config.maxTokens>1024)throw Error('Invalid classifier.json: mode off/shadow/recommend, model must match active Seek/high policy, timeout 1..30000ms, maxTokens 64..1024 required');
+ if(!['off','shadow','recommend'].includes(config.mode)||config.model!==expectedModel||!Number.isInteger(config.timeoutMs)||config.timeoutMs<1||config.timeoutMs>30000||!Number.isInteger(config.maxTokens)||config.maxTokens<64||config.maxTokens>1024)throw Error('Invalid classifier.json: mode off/shadow/recommend, model must match active Small Combo classifier policy, timeout 1..30000ms, maxTokens 64..1024 required');
  return config;
 }
 

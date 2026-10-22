@@ -34,12 +34,13 @@ with tempfile.TemporaryDirectory() as tmp:
     record(producer, 'COMPLETE')
     record(checker, 'FAILED')
     raised = a.escalate(plan['run_id'], checker['role_id'], 'Checker fixture failure', str(project), 'bridge-check', False, state)['call']
-    assert (raised['model'], raised['reasoning_effort']) == ('code-sol', 'low')
+    assert (raised['model'], raised['policy_combo'], raised['reasoning_effort']) == ('code-sol', 'Medium', 'low')
     request = {'op': 'dispatch', 'run': plan['run_id'], 'role': checker['role_id'], 'project': str(project), 'session': 'bridge-check'}
     def bridge():
         script = "import {callBridge} from " + json.dumps((ROOT / 'bridge-client.mjs').as_uri()) + ";\n"
         script += 'try { console.log(JSON.stringify(callBridge(' + json.dumps({'python': sys.executable, 'state': str(state)}) + ',' + json.dumps(str(ROOT)) + ',' + json.dumps(request) + '))); } catch(e) { console.error(e.message); process.exitCode=1; }'
-        return subprocess.run([NODE, '--input-type=module', '-e', script], capture_output=True, text=True, encoding='utf-8', timeout=40)
+        return subprocess.run([NODE, '--input-type=module', '-e', script], capture_output=True, text=True, encoding='utf-8', timeout=40,
+                              env={**os.environ, 'PYTHONIOENCODING': 'utf-8', 'PYTHONUTF8': '1'})
     artifact.write_text('changed after producer', encoding='utf-8')
     failed = bridge()
     assert failed.returncode == 1

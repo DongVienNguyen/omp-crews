@@ -1,8 +1,6 @@
 ---
-name: crew-research-seek
-description: Crews research, code-seek high remap fallback
-model: 9router/code-seek:high
-thinking: high
+name: crew-research-small
+description: Crews research using the admitted Small Combo model and effort
 blocking: true
 tools:
 - read

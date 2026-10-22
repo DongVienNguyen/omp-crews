@@ -1,5 +1,16 @@
-# Verification — crews-omp 0.2.0
+# Verification — crews-omp 0.3.0
 
+## Combo release acceptance
+
+- Current policy is Combo Small/Medium/Large, each with user model ID and Low/Medium/High/Auto. Missing effort defaults Auto; native wire effort is lowercase. Former fixed-Seek-high/remap observations below are historical 0.2.0 evidence, not current routing.
+- Five Python suites pass: classification/bilingual corpus/safety/history, canonical MCP schema, all Combo needs and boundaries, explicit effort/repair/escalation/config binding, multi-role role-local routing, stale artifact/replay/UTF-8 bridge.
+- Node checks pass: classifier/cache/cancellation, failed-plan recovery, write scope, runtime ownership, dialog cancel/save/stale/unsupported validation, and local scripted HTTP provider native main->task->read->receipt lifecycle.
+- Interactive OMP 18.12.5 `/crew combos` actually displayed Small/Medium/Large, provider/model fields, Auto/Low/Medium/High. Smoke canceled without writing. Policy saves serialize optimistic binding check and atomic replace; concurrent snapshot test proves exactly one writer wins.
+- Native global Auto runs completed with matching wire model/effort and exit0: Small low `f08f68dcaf8349df9b9bf73374367889`, Small medium `f02ac00840f1432594c9ac5ff00d2ca2`, Small high `a08d0b2298a746daad0b332a0ebd7df5`, Medium medium `e198c55d3c9b48c1a4e3ccd23c36c71d`; Large high also COMPLETE in the same recorded native smoke. No self-reported model identity used.
+- Packaging suite: 6 passed, 0 failed/skipped; real isolated Python runtime, shared/reused model IDs, missing-effort Auto, CLI invalid-input preservation, pure validation, serialized saves, profile paths, doctor/MCP, migration/rollback/upgrade/reinstall.
+- Global setup upgraded private runtime to 0.3.0; doctor ready, main chat/credentials/history preserved. Old plans and tickets without the new policy binding are refused; create new plans, never auto-replay.
+
+## Historical 0.2.0 evidence
 ## Exercised implementation evidence
 
 - Python classification: 16 Vietnamese/English corpus cases, explicit precedence, tri-state safety contradictions, d1/1.001 and d2.49/2.5 boundaries, pure preview, automatic intake, project-scoped history, bridge UTF-8.

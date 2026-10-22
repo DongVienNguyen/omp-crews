@@ -95,58 +95,26 @@ def refuse(errors):
 
 
 def classify_role(role):
-    """No state, providers, scope expansion, or keyword-based cheap defaults."""
     if role.get('kind') not in catalog.load()['kinds']:
         raise ValueError('kind: valid role kind required')
-    if not isinstance(role.get('mission'), str) or not role['mission'].strip():
-        raise ValueError('mission: nonempty objective required')
-    solution_space = role.get('solution_space')
-    if solution_space is not None and (not isinstance(solution_space, str) or not solution_space.strip()):
-        raise ValueError('solution_space: nonempty string required')
-    if 'classification' in role and type(role['classification']) is not bool:
-        raise ValueError('classification: strict boolean required')
-    refuse(answer_errors(role, require_complete=False))
-    facts = ClassificationFacts.model_validate({} if role.get('facts') is None else role['facts']).model_dump()
-    refuse(safety_errors(role))
-    answers = dict(role['answers'])
-    declared = answers.get('need') is not None and answers.get('difficulty') is not None
-    suggestion = None
-    reason = 'insufficient deterministic evidence; supply need/difficulty or enable semantic recommendation'
-    if declared:
-        reason = 'valid declared need/difficulty take precedence'
-    elif facts['unknown_cause'] is True or facts['consequential_judgment'] is True:
-        suggestion = RUBRIC['rules']['unknown_cause']
-        reason = 'unknown cause or consequential judgment requires hard reasoning'
-    elif facts['behavior_undecided'] is True:
-        suggestion = RUBRIC['rules']['integration_behavior_undecided' if role['kind'] == 'integrate' else 'behavior_undecided']
-        reason = 'behavior or component seams remain undecided'
-    elif all(facts[key] is False for key in ('behavior_undecided', 'unknown_cause', 'consequential_judgment')):
-        if role['kind'] == 'research' and facts['information_only'] is True and facts['targets_fixed'] is True:
-            suggestion = RUBRIC['rules']['information_lookup']
-            reason = 'bounded information-only lookup of fixed targets'
+    if not isinstance(role.get('mission'), str) or not role['mission'].strip(): raise ValueError('mission: nonempty objective required')
+    if role.get('solution_space') is not None and (not isinstance(role['solution_space'], str) or not role['solution_space'].strip()): raise ValueError('solution_space: nonempty string required')
+    if 'classification' in role and type(role['classification']) is not bool: raise ValueError('classification: strict boolean required')
+    refuse(answer_errors(role, require_complete=False));facts=ClassificationFacts.model_validate({} if role.get('facts') is None else role['facts']).model_dump();refuse(safety_errors(role));answers=dict(role['answers']);declared=answers.get('need') is not None and answers.get('difficulty') is not None;suggestion=None;reason='insufficient deterministic evidence; supply need/difficulty or enable semantic recommendation'
+    if declared: reason='valid declared need/difficulty take precedence'
+    elif facts['unknown_cause'] is True or facts['consequential_judgment'] is True: suggestion=RUBRIC['rules']['unknown_cause'];reason='unknown cause or consequential judgment requires hard reasoning'
+    elif facts['behavior_undecided'] is True: suggestion=RUBRIC['rules']['integration_behavior_undecided' if role['kind']=='integrate' else 'behavior_undecided'];reason='behavior or component seams remain undecided'
+    elif all(facts[key] is False for key in ('behavior_undecided','unknown_cause','consequential_judgment')):
+        if role['kind']=='research' and facts['information_only'] is True and facts['targets_fixed'] is True: suggestion=RUBRIC['rules']['information_lookup'];reason='bounded information-only lookup of fixed targets'
         elif facts['method_fixed'] is True and facts['targets_fixed'] is True:
-            if role['kind'] == 'check' and facts['criterion_fixed'] is True:
-                suggestion = RUBRIC['rules']['fixed_check']
-                reason = 'fixed method, targets and criterion; deterministic verification'
-            elif role['kind'] in ('produce', 'integrate'):
-                suggestion = RUBRIC['rules']['fixed_edit']
-                reason = 'fully prescribed edit with no unresolved behavior or judgment'
+            if role['kind']=='check' and facts['criterion_fixed'] is True: suggestion=RUBRIC['rules']['fixed_check'];reason='fixed method, targets and criterion; deterministic verification'
+            elif role['kind'] in ('produce','integrate'): suggestion=RUBRIC['rules']['fixed_edit'];reason='fully prescribed edit with no unresolved behavior'
     if suggestion:
-        for key, value in zip(('need', 'difficulty'), suggestion):
-            if answers.get(key) is None:
-                answers[key] = value
-    complete = answers.get('need') is not None and answers.get('difficulty') is not None
-    if complete:
-        effective = {**role, 'answers': answers}
-        refuse(answer_errors(effective) + safety_errors(effective))
-        from crews.omp_adapter import preview_seat
-        seat = preview_seat(effective)
-        tier = {'code-seek': 'mechanical', 'code-sol': 'implementation', 'code-astra': 'reasoning'}[seat['policy_model']]
-    else:
-        answers, tier = None, None
+        for key,value in zip(('need','difficulty'),suggestion):
+            if answers.get(key) is None: answers[key]=value
     from crews.omp_adapter import model_policy
-    policy=model_policy()
-    return {'answers': answers, 'reason': reason,
-            'outcome': 'declared' if declared else 'deterministic' if complete else 'requires_classification',
-            'tier': tier, 'policy_version': policy_version(),
-            'classifier_model':policy['provider']+'/'+policy['models']['haiku']+':high'}
+    from crews.omp_adapter import policy as active_policy
+    policy=model_policy();combo_model=policy['combos'];classifier_model=active_policy()['classifier_model'];complete=answers.get('need') is not None and answers.get('difficulty') is not None
+    if not complete:return {'answers':None,'reason':reason,'outcome':'requires_classification','tier':None,'policy_version':policy_version(),'classifier_model':classifier_model,'model_policy':combo_model}
+    effective={**role,'answers':answers};refuse(answer_errors(effective)+safety_errors(effective));from crews.omp_adapter import preview_seat;seat=preview_seat(effective);tier={'Small':'small','Medium':'medium','Large':'large'}[seat['policy_combo']]
+    return {'answers':answers,'reason':reason,'outcome':'declared' if declared else 'deterministic','tier':tier,'policy_version':policy_version(),'classifier_model':classifier_model,'model_policy':combo_model}

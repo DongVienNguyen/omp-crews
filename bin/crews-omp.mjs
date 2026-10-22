@@ -22,28 +22,27 @@ function cli() {
 try {
   const args = process.argv.slice(2);
   command = args.shift();
+  options.json = args.includes('--json');
   if(command === 'help' || command === '--help' || args.includes('--help')) {
-    console.log('Usage: crews-omp setup|doctor|migrate|uninstall|rollback [options]\n\nCommands:\n  setup      Provision isolated Python runtime and owned MCP registration\n  doctor     Check native plugin, model aliases, and live MCP handshake\n  migrate    Replace owned legacy discovery after native plugin registration\n  uninstall  Unlink native plugin and remove owned MCP registration; retain state\n  rollback   Restore unchanged migration snapshot and unlink new plugin\n\nOptions:\n  --python PATH          Python 3.12+ executable\n  --agent-dir PATH       Selected OMP agent directory\n  --state-dir PATH       Persistent Crews state directory\n  --offline              Install dependencies without package indexes\n  --json                 Machine-readable output\n  --dry-run              Inspect migrate/uninstall/rollback without mutation\n  --register-plugin      Explicitly link package using native OMP CLI\n  --expected-hashes FILE  Migration ownership hashes {files:{absolutePath:sha256}}\n  --backup DIRECTORY     Owned migration snapshot for rollback\n  --help                 Show help without provisioning or changing files');
+    console.log('Usage: crews-omp setup|doctor|combo|migrate|uninstall|rollback [options]\n\nCommands:\n  setup      Provision isolated Python runtime and owned MCP registration\n  doctor     Check native plugin, configured combos, and live MCP handshake\n  combo      Show, set or reset Small, Medium and Large model/effort assignments\n  migrate    Replace owned legacy discovery after native plugin registration\n  uninstall  Unlink native plugin and remove owned MCP registration; retain state\n  rollback   Restore unchanged migration snapshot and unlink new plugin\n\nOptions:\n  --python PATH          Python 3.12+ executable\n  --agent-dir PATH       Selected OMP agent directory\n  --state-dir PATH       Persistent Crews state directory\n  --profile NAME         Named OMP profile\n  --offline              Install dependencies without package indexes\n  --json                 Machine-readable output\n  --dry-run              Preview migrate, uninstall or rollback\n  --register-plugin      Link native plugin during setup\n  --expected-hashes FILE Ownership hashes for legacy migration\n  --backup DIRECTORY     Migration snapshot for rollback\n\nCombo: combo show|set|reset [--provider ID] [--small-model ID --small-effort Auto|Low|Medium|High] [--medium-model ID --medium-effort Auto|Low|Medium|High] [--large-model ID --large-effort Auto|Low|Medium|High]\nModel changes default to Auto effort when effort is omitted. Combo set imports legacy policy files; reset replaces them with defaults.');
     return;
   }
-  if(command==='policy'){
-    const action=args.shift()||'show';
-    if(!['show','set','reset'].includes(action))throw Error('Usage: crews-omp policy show|set|reset [--provider ID --haiku ID --sonnet ID --opus ID] [--json]');
-    if(args.includes('--json'))options.json=true;
-    const loc=locations();const file=path.join(loc.state,'policy.json');const defaults={provider:'9router',models:{haiku:'code-seek',sonnet:'code-sol',opus:'code-astra'}};const current=readJSON(file,defaults);
-    if(action==='show'){console.log(options.json?JSON.stringify({ok:true,status:'policy',policy:current}):JSON.stringify(current,null,2));return;}
-    if(action==='reset')json(file,defaults);else {const value={provider:current.provider,models:{...current.models}};for(const key of ['provider','haiku','sonnet','opus']){const flag='--'+key;const pos=args.indexOf(flag);if(pos>=0&&args[pos+1])key==='provider'?value.provider=args[pos+1]:value.models[key]=args[pos+1];}json(file,value);}
-    console.log(options.json?JSON.stringify({ok:true,status:'policy_updated',policy:readJSON(file)}):JSON.stringify(readJSON(file),null,2));return;
-  }
+  const action = command === 'combo' && args[0] && !args[0].startsWith('--') ? args.shift() : 'show';
+  const comboFlags = ['provider', ...['small','medium','large'].flatMap(name => [`${name}-model`, `${name}-effort`])];
+  const changes = {};
+  const valueOptions = {'--python':'python','--agent-dir':'agentDir','--state-dir':'state','--profile':'profile','--expected-hashes':'expectedHashes','--backup':'backup'};
+  const switches = {'--json':'json','--offline':'offline','--dry-run':'dryRun','--register-plugin':'registerPlugin'};
   while (args.length) {
     const arg = args.shift();
-    if (['--json', '--offline', '--dry-run', '--register-plugin'].includes(arg)) options[{'--json':'json','--offline':'offline','--dry-run':'dryRun','--register-plugin':'registerPlugin'}[arg]] = true;
-    else if (['--python', '--agent-dir', '--state-dir', '--expected-hashes', '--backup'].includes(arg) && args[0] && !args[0].startsWith('--')) options[{'--python':'python','--agent-dir':'agentDir','--state-dir':'state','--expected-hashes':'expectedHashes','--backup':'backup'}[arg]] = args.shift();
+    if (Object.hasOwn(switches,arg)) options[switches[arg]] = true;
+    else if (Object.hasOwn(valueOptions,arg) && args[0] && !args[0].startsWith('--')) options[valueOptions[arg]] = args.shift();
+    else if (command === 'combo' && action === 'set' && comboFlags.includes(arg.slice(2)) && arg.startsWith('--') && args[0] && !args[0].startsWith('--')) changes[arg.slice(2)] = args.shift();
     else throw new Error(`Unknown or incomplete argument: ${arg}`);
   }
-  if (!['setup', 'doctor', 'migrate', 'uninstall', 'rollback'].includes(command)) throw new Error('Usage: crews-omp setup|doctor|migrate|uninstall|rollback [--python PATH] [--agent-dir PATH] [--state-dir PATH] [--offline] [--json] [--dry-run] [--register-plugin] [--expected-hashes FILE] [--backup DIRECTORY]');
+  if (!['setup', 'doctor', 'combo', 'migrate', 'uninstall', 'rollback'].includes(command)) throw new Error('Usage: crews-omp setup|doctor|combo|migrate|uninstall|rollback [options]');
+  if (options.profile && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(options.profile)) throw new Error('Invalid profile name');
   if (options.dryRun && !['migrate', 'uninstall', 'rollback'].includes(command)) throw new Error('--dry-run is supported by migrate, uninstall and rollback');
-  const result = main();
+  const result = command === 'combo' ? combo(action,changes) : main();
   console.log(options.json ? JSON.stringify(result) : `${result.status}\n${JSON.stringify(result, null, 2)}`);
   if (result.ok === false) process.exitCode = 1;
 } catch (error) {
@@ -60,16 +59,20 @@ function run(executable, args, env = process.env, allowFailure = false) {
 function locations() {
   const home = process.env.CREWS_OMP_USER_HOME || os.homedir();
   const configRoot = path.resolve(home,process.env.PI_CONFIG_DIR || '.omp');
-  const profile = process.env.OMP_PROFILE || process.env.PI_PROFILE;
+  const profile = options.profile || process.env.OMP_PROFILE || process.env.PI_PROFILE;
   const agentDir = path.resolve(options.agentDir || process.env.CREWS_OMP_AGENT_DIR || (profile ? path.join(configRoot,'profiles',profile,'agent') : process.env.PI_CODING_AGENT_DIR || path.join(configRoot,'agent')));
   const state = path.resolve(options.state || process.env.CREWS_OMP_HOME || (profile ? path.join(configRoot,'profiles',profile,'crews-omp') : path.join(home,'.crews-omp')));
   return {home,configRoot,agentDir,state,config:path.join(agentDir,'config.yml'),mcp:path.join(agentDir,'mcp.json'),runtime:path.join(state,'runtime.json'),legacy:path.join(home,'.local','share','crews-omp')};
 }
 function write(file, data) {
   fs.mkdirSync(path.dirname(file), {recursive:true});
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, data);
-  fs.renameSync(tmp, file);
+  const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tmp, data, {flag:'wx'});
+    fs.renameSync(tmp, file);
+  } finally {
+    fs.rmSync(tmp, {force:true});
+  }
 }
 function json(file, data) { write(file, `${JSON.stringify(data,null,2)}\n`); }
 function discoverPython() {
@@ -128,24 +131,66 @@ elif op=='models':
  models=providers.get(policy['provider'],{}).get('models',[])
  if isinstance(models,dict): models=[dict(v,id=k) for k,v in models.items()]
  out={}
- for seat,needed in {'haiku':['high'],'sonnet':['low','medium','high','xhigh'],'opus':['low','medium','high']}.items():
-  name=policy['models'][seat]
-  model=next((m for m in models if m.get('id')==name),None)
-  efforts=(model or {}).get('thinking',{}).get('efforts',[])
-  out[policy['provider']+'/'+name]={'present':model is not None,'missingEfforts':[x for x in needed if x not in efforts]}
+ for combo in ['Small','Medium','Large']:
+  name=policy['combos'][combo]['model']; configured=policy['combos'][combo]['effort']
+  needed=['low','medium','high'] if configured=='Auto' else [configured.lower()]
+  model=next((m for m in models if m.get('id')==name),None);efforts=(model or {}).get('thinking',{}).get('efforts',[])
+  entry=out.setdefault(policy['provider']+'/'+name,{'combos':[],'configuredEfforts':{},'present':model is not None,'requiredEfforts':[],'missingEfforts':[]})
+  entry['combos'].append(combo); entry['configuredEfforts'][combo]=configured
+  entry['requiredEfforts']=sorted(set(entry['requiredEfforts']+needed),key=['low','medium','high'].index)
+  entry['missingEfforts']=[x for x in entry['requiredEfforts'] if x not in efforts]
  print(json.dumps(out))
 `;
+function validatePolicy(python,policy) {
+ const script=String.raw`import json,sys
+sys.path.insert(0,sys.argv[2])
+from crews.omp_adapter import validate_policy
+print(json.dumps(validate_policy(json.loads(sys.argv[1])),separators=(',',':')))`;
+ const result=run(python,['-c',script,JSON.stringify(policy),root],{...process.env,PYTHONUTF8:'1',PYTHONNOUSERSITE:'1'},true);
+ if(result.status!==0) throw new Error('Invalid combo policy');
+ return JSON.parse(result.stdout);
+}
+function savePolicy(python,loc,policy) {
+ const script=String.raw`import json,sys
+sys.path.insert(0,sys.argv[2])
+from crews.omp_adapter import save_policy
+print(json.dumps(save_policy(json.loads(sys.argv[1]))['model_policy'],separators=(',',':')))`;
+ const result=run(python,['-c',script,JSON.stringify(policy),root],{...process.env,CREWS_OMP_HOME:loc.state,PYTHONUTF8:'1',PYTHONNOUSERSITE:'1'},true);
+ if(result.status!==0) throw new Error('Cannot save combo policy');
+ return JSON.parse(result.stdout);
+}
+function policyPython(loc) { const saved=readJSON(loc.runtime); return options.python || saved.python || discoverPython().exe; }
+function combo(action,changes) {
+  if(!['show','set','reset'].includes(action)) throw new Error('Usage: crews-omp combo show|set|reset [options]');
+  const loc=locations(); const file=path.join(loc.state,'policy.json');
+  const defaults={provider:'9router',combos:{Small:{model:'code-seek',effort:'Auto'},Medium:{model:'code-sol',effort:'Auto'},Large:{model:'code-astra',effort:'Auto'}}};
+  let value=action==='reset'?defaults:readJSON(file,defaults);
+  if(action==='set') {
+    // Legacy import is explicit: reads and doctor never rewrite existing policy.
+    if(value && typeof value==='object' && !Array.isArray(value) && Object.keys(value).length===2 && value.models && !Array.isArray(value.models) && Object.keys(value.models).sort().join(',')==='haiku,opus,sonnet') {
+      value={provider:value.provider,combos:Object.fromEntries(['Small','Medium','Large'].map((name,index)=>[name,{model:value.models[['haiku','sonnet','opus'][index]],effort:'Auto'}]))};
+    }
+    value=validatePolicy(policyPython(loc),value);
+    if(Object.hasOwn(changes,'provider')) value.provider=changes.provider;
+    for(const name of ['Small','Medium','Large']) {
+      const key=name.toLowerCase();
+      if(Object.hasOwn(changes,`${key}-model`)) value.combos[name]={model:changes[`${key}-model`],effort:'Auto'};
+      if(Object.hasOwn(changes,`${key}-effort`)) value.combos[name].effort=changes[`${key}-effort`];
+    }
+  }
+  const python=policyPython(loc);
+  const policy=action==='show'?validatePolicy(python,value):savePolicy(python,loc,value);
+  return {ok:true,status:action==='show'?'combo':action==='reset'?'combo_reset':'combo_updated',policy};
+}
 function yaml(python,file,op,values) {
-  const result = run(python,['-c',yamlScript,JSON.stringify({file,op,values})],process.env,true);
-  if(result.status !== 0) throw new Error(`Cannot parse ${path.basename(file)} configuration`);
-  return result.stdout;
+ const result=run(python,['-c',yamlScript,JSON.stringify({file,op,values})],process.env,true);
+ if(result.status!==0) throw new Error(`Cannot parse ${path.basename(file)} configuration`);
+ return result.stdout;
 }
 function pluginEnv(loc) {
-  const configRoot = loc.configRoot;
-  // OMP's plugin CLI resolves PI_CONFIG_DIR relative to user home, including on Windows.
-  const relative = path.relative(loc.home, configRoot);
-  if(path.isAbsolute(relative)) throw new Error('OMP plugin config must be on same drive as user home');
-  return {...process.env,PI_CODING_AGENT_DIR:loc.agentDir,PI_CONFIG_DIR:relative || '.',CREWS_OMP_AGENT_DIR:loc.agentDir,CREWS_OMP_HOME:loc.state};
+ const configRoot=loc.configRoot; const relative=path.relative(loc.home,configRoot);
+ if(path.isAbsolute(relative)) throw new Error('OMP plugin config must be on same drive as user home');
+ return {...process.env,...(options.profile?{OMP_PROFILE:options.profile,PI_PROFILE:options.profile}:{}),PI_CODING_AGENT_DIR:loc.agentDir,PI_CONFIG_DIR:relative||'.',CREWS_OMP_AGENT_DIR:loc.agentDir,CREWS_OMP_HOME:loc.state};
 }
 function pluginList(loc) {
   const result = run(process.env.CREWS_OMP_OMP || 'omp',['plugin','list','--json'],pluginEnv(loc));

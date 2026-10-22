@@ -1,8 +1,6 @@
 ---
-name: crew-check-astra
-description: Crews check, code-astra difficulty-based low/medium/high effort
-model: 9router/code-astra:high
-thinking: high
+name: crew-produce-small
+description: Crews produce using the admitted Small Combo model and effort
 blocking: true
 tools:
 - read
@@ -12,6 +10,8 @@ tools:
 - ls
 - yield
 - bash
+- write
+- edit
 spawns: []
 advisor: false
 prewalk: false

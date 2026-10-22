@@ -1,8 +1,6 @@
 ---
-name: crew-check-seek
-description: Crews check, code-seek high remap fallback
-model: 9router/code-seek:high
-thinking: high
+name: crew-integrate-small
+description: Crews integrate using the admitted Small Combo model and effort
 blocking: true
 tools:
 - read
@@ -12,6 +10,8 @@ tools:
 - ls
 - yield
 - bash
+- write
+- edit
 spawns: []
 advisor: false
 prewalk: false

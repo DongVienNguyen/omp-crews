@@ -7,6 +7,7 @@ import {callBridge} from './bridge-client.mjs';
 import {resolveRuntime} from './runtime-paths.mjs';
 import {Classifier,loadClassifierConfig} from './classifier.mjs';
 import {completeSimple} from '@oh-my-pi/pi-ai';
+import {editCombos} from './combo-editor.mjs';
 const base=path.dirname(fileURLToPath(import.meta.url));
 let settings:any;
 try{settings=resolveRuntime(base);}catch{settings=null;}
@@ -25,7 +26,9 @@ export default function(pi:any){
   if(!resolved)throw Error('Classifier model is unavailable: '+request.model);
   classifierRequest=true;
   try{
-   const message=await completeSimple(resolved,{systemPrompt:[request.prompt],messages:[{role:'user',content:JSON.stringify(request.input),timestamp:Date.now()}]},{apiKey:requestContext.modelRegistry.resolver(resolved,requestContext.sessionManager.getSessionId()),reasoning:'high',maxTokens:request.maxTokens,signal:request.signal});
+   const effort=request.model.slice(request.model.lastIndexOf(':')+1);
+   if(effort!=='low'&&effort!=='medium'&&effort!=='high')throw Error('Classifier requires a valid Combo effort');
+   const message=await completeSimple(resolved,{systemPrompt:[request.prompt],messages:[{role:'user',content:JSON.stringify(request.input),timestamp:Date.now()}]},{apiKey:requestContext.modelRegistry.resolver(resolved,requestContext.sessionManager.getSessionId()),reasoning:effort,maxTokens:request.maxTokens,signal:request.signal});
    return {text:message.content.filter((p:any)=>p.type==='text').map((p:any)=>p.text).join(''),stopReason:message.stopReason,usage:message.usage};
   }finally{classifierRequest=false;}
  });
@@ -68,7 +71,7 @@ export default function(pi:any){
  pi.on('before_agent_start',(event:any,ctx:any)=>{
   if(!isChild(ctx)){
    recovery.reset();
-   return {message:{customType:'crews-routing-policy',content:'Crew work: read crew_catalog canonical schema and rubric before planning. Simple bounded_retrieval research with role difficulty <= 1 uses Seek/high; exact edits use repeatable_task, deterministic checks use mechanical_verification. Classify each role, not the entire project. Split lookup/check from uncertain reasoning when useful. Repair a failed crew_plan before delegation; ordinary tasks do not receive Crews routing. Main chat model stays unchanged.',display:false}};
+   return {message:{customType:'crews-routing-policy',content:'Crew work: read crew_catalog canonical schema and rubric before planning. Assign each role to Combo Small, Medium or Large using task capability; effort is Low/Medium/High or Auto from role difficulty. Auto: below1 low, below2 medium, otherwise high. Explicit Combo effort wins. Classify each role, not the entire project. Repair failed crew_plan before delegation; ordinary tasks receive no Crews routing. Main chat model stays unchanged.',display:false}};
   }
   const token=((event.prompt||'')+'\n'+(event.systemPrompt||[]).join('\n')).match(/\[crew-ticket:([a-f0-9]{32})\]/)?.[1];
   if(!ctx.agent.name?.startsWith('crew-'))return;
@@ -198,8 +201,16 @@ export default function(pi:any){
   const result=await classifyRole(role,ctx,signal);
   return {classification:result,seat:result.answers?bridge({op:'preview',role:{...role,answers:result.answers},project:ctx.cwd}):null,spawned:false};
  }
- pi.registerCommand('crew',{description:'Crews status/test/history/reload or plan a task',handler:async(args:any,ctx:any)=>{
+ pi.registerCommand('crew',{description:'Crews combos/status/test/history/reload or plan a task',handler:async(args:any,ctx:any)=>{
   const [op,...rest]=args.trim().split(/\s+/);
+  if(op==='combos'){
+   if(!ctx.hasUI){ctx.ui.notify('Use crews-omp combo show|set|reset in headless mode','error');return;}
+   try{
+    const edited=await editCombos(ctx.ui,bridge({op:'policy'}),(value:unknown,expected_binding:string)=>bridge({op:'save_policy',value,expected_binding}),(model:string)=>ctx.models.resolve(model));
+    if(edited.saved){classifier.reload();ctx.ui.notify('Combo policy saved. Create fresh plans; main model unchanged.','info');}
+   }catch(error:unknown){ctx.ui.notify(error instanceof Error?error.message:String(error),'error');}
+   return;
+  }
   if(!['status','test','history','reload'].includes(op)){pi.sendUserMessage('Use crew-omp skill and crews-omp MCP to plan and execute this request: '+args);return;}
   try{const role=op==='test'?JSON.parse(rest.join(' ')):undefined;ctx.ui.notify(JSON.stringify(await preview(op,role,ctx)), 'info');}catch(error:any){ctx.ui.notify(error.message,'error');}
  }});

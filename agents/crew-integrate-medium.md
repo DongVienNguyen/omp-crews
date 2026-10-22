@@ -1,8 +1,6 @@
 ---
-name: crew-integrate-sol
-description: Crews integrate, code-sol with planned upstream effort
-model: 9router/code-sol:high
-thinking: high
+name: crew-integrate-medium
+description: Crews integrate using the admitted Medium Combo model and effort
 blocking: true
 tools:
 - read

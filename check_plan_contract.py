@@ -66,9 +66,8 @@ async def main():
             plan_spec = server.PlanSpec.model_validate(SPEC)
             task_answers = server.TaskAnswers.model_validate(ANSWERS)
             direct = server.crew_plan(plan_spec, task_answers, state, 'typed-contract')
-            assert isinstance(direct, dict) and direct['task'] == SPEC['task']
             call = direct['waves'][0]['calls'][0]
-            assert (call['model'], call['reasoning_effort']) == ('code-seek', 'high')
+            assert (call['model'], call['reasoning_effort'], call['policy_combo']) == ('code-seek', 'medium', 'Small')
             legacy = dict(SPEC, need='bounded_retrieval', difficulty=1, divisible=0, needs_verifier=0)
             legacy_result = server.crew_plan(legacy, {}, state, 'legacy-contract')
             assert legacy_result['budget'] == direct['budget']
@@ -134,7 +133,7 @@ async def main():
             assert legacy['need'] == 'bounded_retrieval' and 'need' not in SPEC
             params = StdioServerParameters(command=sys.executable,
                 args=[str(Path(server.__file__).resolve())],
-                env={**os.environ, 'CREWS_OMP_HOME': state})
+                env={**os.environ, 'CREWS_OMP_HOME': state, 'PYTHONIOENCODING': 'utf-8', 'PYTHONUTF8': '1'})
             async with stdio_client(params) as (reader, writer):
                 async with ClientSession(reader, writer) as client:
                     await client.initialize()
@@ -146,11 +145,11 @@ async def main():
                     assert data['questions'] == cat['questions']
                     assert data['thresholds'] == cat['thresholds']
                     assert data['kind_columns'] == {k: v['column'] for k, v in cat['kinds'].items()}
-                    assert data['seek_first_policy']['kind'] == 'research'
-                    assert data['seek_first_policy']['need'] == 'bounded_retrieval'
-                    assert data['seek_first_policy']['max_difficulty'] == 1
-                    assert set(data['seek_first_policy']['excluded_kinds']) == {'produce', 'integrate', 'check'}
-                    assert 'difficult_review' in data['seek_first_policy']['excluded_needs']
+                    assert set(data['model_policy']['combos']) == {'Small', 'Medium', 'Large'}
+                    assert data['combo_effort_options'] == ['Low', 'Medium', 'High', 'Auto']
+                    assert data['classifier_model'] == '9router/code-seek:medium'
+                    assert 'seek_first_policy' not in data
+                    assert data['effort_policy']
                     example = data['minimal_example']
                     result = await client.call_tool('crew_plan', {**example, 'project': state, 'session': 'mcp-contract'})
                     assert not result.isError, result

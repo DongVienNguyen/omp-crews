@@ -1,111 +1,207 @@
-"""Run with runtime-venv/Scripts/python.exe check_effort_policy.py (no network)."""
-import hashlib
+"""Offline Combo model/effort contracts; run with provisioned runtime Python."""
+from contextlib import contextmanager
+from copy import deepcopy
 import json
 import os
-import subprocess
-import sys
-import tempfile
 from pathlib import Path
-from crews import omp_adapter as a
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
+from crews import omp_adapter as adapter
+
+
+NEED_COMBOS = {
+    'mechanical_verification': 'Small',
+    'repeatable_task': 'Small',
+    'bounded_retrieval': 'Small',
+    'everyday_implementation': 'Medium',
+    'long_running_agentic': 'Medium',
+    'difficult_review': 'Large',
+    'integration_architecture': 'Large',
+    'specialist': 'Large',
+}
+DEFAULT_MODELS = {'Small': 'code-seek', 'Medium': 'code-sol', 'Large': 'code-astra'}
+
+
+@contextmanager
+def isolated_home(state):
+    previous = os.environ.get('CREWS_OMP_HOME')
+    os.environ['CREWS_OMP_HOME'] = str(state)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop('CREWS_OMP_HOME', None)
+        else:
+            os.environ['CREWS_OMP_HOME'] = previous
+
+
+def rejects(action, fragment):
+    try:
+        action()
+    except ValueError as exc:
+        assert fragment in str(exc), str(exc)
+    else:
+        raise AssertionError(f'Expected refusal containing {fragment!r}')
+
+
+def role(need, difficulty, kind='research', name='combo-policy-checker'):
+    return {
+        'name': name, 'kind': kind,
+        'mission': 'Inspect Combo model and effort policy', 'deliverable': name + '.json',
+        'scope': [name + '.txt'] if kind in ('produce', 'integrate') else [],
+        'inputs': ['fixture.txt'] if kind == 'check' else [],
+        'acceptance': ['Report assigned Combo and effort accurately'],
+        'criteria': ['Report assigned Combo and effort accurately'],
+        'answers': {'need': need, 'difficulty': difficulty, 'divisible': 0, 'specific': 1},
+    }
+
+
+def task_answers(need, difficulty, verifier=False):
+    return {
+        'need': {'choice': need, 'confidence': 1, 'probabilities': {need: 1}},
+        'difficulty': {'score': difficulty}, 'divisible': {'noul': 0},
+        'needs_verifier': {'noul': int(verifier)},
+    }
 
 
 def plan(state, need, difficulty, kind='research'):
-    role = {'name': 'effort-policy-checker', 'kind': kind,
-            'mission': 'Inspect configuration effort policy and verify assigned effort',
-            'deliverable': 'effort.json', 'scope': [],
-            'acceptance': ['Assigned effort matches the global policy'],
-            'criteria': ['Assigned effort matches the global policy'],
-            'inputs': ['fixture.txt'] if kind == 'check' else [],
-            'answers': {'need': need, 'difficulty': difficulty, 'divisible': 0, 'specific': 1}}
-    if kind in ('produce', 'integrate'):
-        role['scope'] = ['fixture.txt']
-    answers = {'need': {'choice': need, 'confidence': 1, 'probabilities': {need: 1}},
-               'difficulty': {'score': difficulty}, 'divisible': {'noul': 0},
-               'needs_verifier': {'noul': 1 if kind == 'check' else 0}}
-    result = a.build_plan({'task': 'Inspect configuration effort policy', 'roles': [role]},
-                          answers, str(Path(state).resolve()), 'effort-check', state)
+    result = adapter.build_plan(
+        {'task': 'Inspect Combo model and effort policy', 'roles': [role(need, difficulty, kind)]},
+        task_answers(need, difficulty, kind == 'check'), str(Path(state).resolve()), 'combo-policy', state,
+    )
     return result, result['waves'][0]['calls'][0]
 
 
-def fail(state, result, cell):
-    a.admit(result['run_id'], cell['role_id'], cell['prompt'], result['project'], result['session'], state)
-    a.record(result['run_id'], cell['role_id'], {'status': 'FAILED', 'verification': ['Check failed']},
-             result['project'], result['session'], state)
+def fail(state, result, call):
+    adapter.admit(result['run_id'], call['role_id'], call['prompt'], result['project'], result['session'], state)
+    adapter.record(result['run_id'], call['role_id'],
+                   {'status': 'FAILED', 'verification': ['Combo check failed']},
+                   result['project'], result['session'], state)
 
 
-with tempfile.TemporaryDirectory() as state:
-    for need, difficulty, kind, model, effort in [
-        ('mechanical_verification', 0, 'research', 'code-seek', 'high'),
-        ('mechanical_verification', 3, 'check', 'code-seek', 'high'),
-        ('repeatable_task', 0, 'produce', 'code-seek', 'high'),
-        ('repeatable_task', 2.49, 'research', 'code-seek', 'high'),
-        ('repeatable_task', 2.5, 'research', 'code-sol', 'low'),
-        ('repeatable_task', 0, 'check', 'code-sol', 'low'),
-        ('everyday_implementation', 0, 'produce', 'code-sol', 'low'),
-        ('everyday_implementation', 2.5, 'research', 'code-sol', 'medium'),
-        ('long_running_agentic', 0, 'integrate', 'code-sol', 'high'),
-        ('long_running_agentic', 3, 'integrate', 'code-sol', 'xhigh'),
-        ('difficult_review', 0, 'research', 'code-astra', 'low'),
-        ('difficult_review', 0.999, 'check', 'code-astra', 'low'),
-        ('difficult_review', 1, 'research', 'code-astra', 'medium'),
-        ('difficult_review', 1.999, 'research', 'code-astra', 'medium'),
-        ('difficult_review', 2, 'research', 'code-astra', 'high'),
-        ('integration_architecture', 3, 'research', 'code-astra', 'high'),
-    ]:
-        _, cell = plan(state, need, difficulty, kind)
-        assert (cell['model'], cell['reasoning_effort']) == (model, effort), cell
-        assert cell['agent_type'] == 'crew-' + kind + '-' + model.removeprefix('code-')
+def escalate(state, result, call, repair=False):
+    return adapter.escalate(result['run_id'], call['role_id'], 'Recorded Combo check failure',
+                            result['project'], result['session'], repair, state)['call']
 
-    for need, difficulty, kind, expected in [
-        ('repeatable_task', 0, 'research', ('code-sol', 'low')),
-        ('everyday_implementation', 0, 'research', ('code-sol', 'medium')),
-        ('everyday_implementation', 3, 'research', ('code-sol', 'high')),
-        ('long_running_agentic', 0, 'integrate', ('code-sol', 'xhigh')),
-        ('long_running_agentic', 3, 'integrate', ('code-astra', 'low')),
-        ('difficult_review', 0, 'research', ('code-astra', 'medium')),
-        ('difficult_review', 1, 'research', ('code-astra', 'high')),
-    ]:
-        result, cell = plan(state, need, difficulty, kind)
-        original = (cell['model'], cell['reasoning_effort'])
-        fail(state, result, cell)
-        repaired = a.escalate(result['run_id'], cell['role_id'], 'Concrete check failed', result['project'], result['session'], True, state)['call']
-        assert (repaired['model'], repaired['reasoning_effort']) == original
+
+def write_policy(state, policy):
+    (Path(state) / 'policy.json').write_text(json.dumps(policy), encoding='utf-8')
+
+
+def check_auto(state):
+    for need, combo in NEED_COMBOS.items():
+        kind = 'check' if need == 'mechanical_verification' else 'research'
+        for difficulty, effort in [(0, 'low'), (0.999, 'low'), (1, 'medium'),
+                                   (1.999, 'medium'), (2, 'high'), (3, 'high')]:
+            _, call = plan(state, need, difficulty, kind)
+            assert (call['policy_combo'], call['model'], call['reasoning_effort']) == (
+                combo, DEFAULT_MODELS[combo], effort), call
+            assert call['agent_type'] == f'crew-{kind}-{combo.lower()}', call
+            assert call['configured_effort'] == 'Auto', call
+            assert call['policy_binding'] == adapter.policy_binding(state), call
+
+
+def check_explicit_and_retries(state):
+    policy = {'provider': 'local-provider', 'combos': {
+        'Small': {'model': 'shared-model', 'effort': 'HIGH'},
+        'Medium': {'model': 'shared-model', 'effort': 'Low'},
+        'Large': {'model': 'large-model', 'effort': 'Medium'},
+    }}
+    write_policy(state, policy)
+    normalized = adapter.model_policy(state)
+    assert normalized['combos']['Small']['effort'] == 'High'
+    for need, combo in NEED_COMBOS.items():
+        configured = normalized['combos'][combo]
+        for difficulty in (0, 3):
+            _, call = plan(state, need, difficulty)
+            assert (call['policy_combo'], call['model'], call['reasoning_effort']) == (
+                combo, configured['model'], configured['effort'].lower()), call
+    result, call = plan(state, 'bounded_retrieval', 2.5)
+    fail(state, result, call)
+    repaired = escalate(state, result, call, repair=True)
+    assert (repaired['policy_combo'], repaired['reasoning_effort']) == ('Small', 'high')
+    assert repaired['role_answers'] == call['role_answers']
+    fail(state, result, repaired)
+    raised = escalate(state, result, repaired)
+    assert (raised['policy_combo'], raised['reasoning_effort'], raised['model']) == ('Medium', 'low', 'shared-model')
+    fail(state, result, raised)
+    strongest = escalate(state, result, raised)
+    assert (strongest['policy_combo'], strongest['reasoning_effort']) == ('Large', 'medium')
+    fail(state, result, strongest)
+    rejects(lambda: escalate(state, result, strongest), 'Large')
+
+    # Auto escalation uses this role's difficulty, not a fixed upgrade effort.
+    (Path(state) / 'policy.json').unlink()
+    for difficulty, effort in [(0, 'low'), (1, 'medium'), (3, 'high')]:
+        result, call = plan(state, 'bounded_retrieval', difficulty)
+        fail(state, result, call)
+        repaired = escalate(state, result, call, repair=True)
+        assert repaired['reasoning_effort'] == effort
         fail(state, result, repaired)
-        raised = a.escalate(result['run_id'], cell['role_id'], 'Still failed', result['project'], result['session'], False, state)['call']
-        assert (raised['model'], raised['reasoning_effort']) == expected, raised
+        raised = escalate(state, result, repaired)
+        assert (raised['policy_combo'], raised['reasoning_effort']) == ('Medium', effort)
 
-    result, cell = plan(state, 'difficult_review', 3)
-    fail(state, result, cell)
-    try:
-        a.escalate(result['run_id'], cell['role_id'], 'Top seat failed', result['project'], result['session'], False, state)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError('Astra/high must refuse escalation')
 
-    result, cell = plan(state, 'mechanical_verification', 0)
-    with a.database(state) as db:
-        stored = json.loads(db.execute('SELECT plan FROM runs WHERE id=?', (result['run_id'],)).fetchone()[0])
-        stored['waves'][0]['calls'][0]['model'] = 'gpt-6-luna'
-        db.execute('UPDATE runs SET plan=? WHERE id=?', (json.dumps(stored), result['run_id']))
-    try:
-        a.admit(result['run_id'], cell['role_id'], cell['prompt'], result['project'], result['session'], state)
-    except ValueError as exc:
-        assert 'Unsupported OMP model' in str(exc), exc
-    else:
-        raise AssertionError('Legacy Luna plan must be refused before dispatch')
+def check_binding_and_validation(state):
+    result, call = plan(state, 'bounded_retrieval', 1)
+    policy = adapter.model_policy(state)
+    changed = deepcopy(policy)
+    changed['combos']['Small']['effort'] = 'High'
+    write_policy(state, changed)
+    assert adapter.policy_binding(state) != call['policy_binding']
+    rejects(lambda: adapter.admit(result['run_id'], call['role_id'], call['prompt'],
+                                  result['project'], result['session'], state), 'policy binding')
+    write_policy(state, policy)
+    assert adapter.policy_binding(state) == call['policy_binding']
+    for invalid, fragment in [
+        ({**policy, 'secret': 'forbidden'}, 'provider and combos only'),
+        ({**policy, 'provider': '../provider'}, 'provider'),
+        ({**policy, 'combos': {**policy['combos'], 'Tiny': {'model': 'tiny'}}}, 'Small, Medium and Large'),
+    ]:
+        rejects(lambda: adapter.validate_policy(invalid), fragment)
+    for field, value in [('model', ''), ('model', '../unsafe model'), ('effort', 'XHigh'), ('effort', False)]:
+        invalid = deepcopy(policy)
+        invalid['combos']['Small'][field] = value
+        rejects(lambda: adapter.validate_policy(invalid), field)
+    missing_effort = deepcopy(policy)
+    del missing_effort['combos']['Small']['effort']
+    assert adapter.validate_policy(missing_effort)['combos']['Small']['effort'] == 'Auto'
+    write_policy(state, {'provider': 'legacy-provider', 'models': {
+        'haiku': 'legacy-small', 'sonnet': 'legacy-medium', 'opus': 'legacy-large'}})
+    assert adapter.model_policy(state) == {'provider': 'legacy-provider', 'combos': {
+        combo: {'model': model, 'effort': 'Auto'}
+        for combo, model in zip(DEFAULT_MODELS, ('legacy-small', 'legacy-medium', 'legacy-large'))}}
 
-    result, cell = plan(state, 'repeatable_task', 0)
-    cell['prompt'] += '\nKiểm tra chính sách mới'
-    with a.database(state) as db:
-        stored = json.loads(db.execute('SELECT plan FROM runs WHERE id=?', (result['run_id'],)).fetchone()[0])
-        stored['waves'][0]['calls'][0]['prompt'] = cell['prompt']
-        db.execute('UPDATE runs SET plan=? WHERE id=?', (json.dumps(stored), result['run_id']))
-        db.execute('UPDATE calls SET digest=? WHERE run=?', (hashlib.sha256(cell['prompt'].encode()).hexdigest(), result['run_id']))
-    request = {'op': 'dispatch', 'run': result['run_id'], 'role': cell['role_id'], 'project': result['project'], 'session': result['session']}
-    process = subprocess.run([sys.executable, str(Path(__file__).with_name('omp_bridge.py'))],
-                             input=json.dumps(request, ensure_ascii=False).encode('utf-8'), capture_output=True,
-                             env={**os.environ, 'CREWS_OMP_HOME': state, 'PYTHONIOENCODING': 'cp1252'}, timeout=30)
-    assert process.returncode == 0, process.stdout
-    assert 'Kiểm tra chính sách mới' in json.loads(process.stdout)['call']['prompt']
-print('PASS: global remap, difficulty boundaries, repair, escalation, legacy rejection and UTF-8 bridge')
+
+def check_serialized_save(state):
+    (Path(state) / 'policy.json').unlink(missing_ok=True)
+    expected = adapter.policy_binding(state)
+    barrier = Barrier(2)
+    def save(model):
+        value = adapter.model_policy(state)
+        value['combos']['Small']['model'] = model
+        barrier.wait()
+        try:
+            adapter.save_policy(value, expected)
+            return 'saved'
+        except ValueError as error:
+            assert 'changed during editing' in str(error)
+            return 'stale'
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(save, ['first-small', 'second-small']))
+    assert sorted(results) == ['saved', 'stale'], results
+
+
+def main():
+    with tempfile.TemporaryDirectory() as state, isolated_home(state):
+        check_auto(state)
+        check_explicit_and_retries(state)
+        check_binding_and_validation(state)
+        check_serialized_save(state)
+    print('PASS: all Combo needs, Auto boundaries, explicit effort, retries, policy binding and validation')
+
+
+if __name__ == '__main__':
+    main()
