@@ -26,9 +26,10 @@ try {
   if(command === 'help' || command === '--help' || args.includes('--help')) {
     console.log('Usage: crews-omp setup|doctor|combo|learning|migrate|uninstall|rollback [options]\n\nCommands:\n  setup      Provision isolated Python runtime and owned MCP registration\n  doctor     Check native plugin, configured combos, and live MCP handshake\n  combo      Show, set or reset Small, Medium and Large model/effort assignments\n  learning   Inspect and manage project-scoped verified learning\n  migrate    Replace owned legacy discovery after native plugin registration\n  uninstall  Unlink native plugin and remove owned MCP registration; retain state\n  rollback   Restore unchanged migration snapshot and unlink new plugin\n\nOptions:\n  --python PATH          Python 3.12+ executable\n  --agent-dir PATH       Selected OMP agent directory\n  --state-dir PATH       Persistent Crews state directory\n  --profile NAME         Named OMP profile\n  --offline              Install dependencies without package indexes\n  --json                 Machine-readable output\n  --dry-run              Preview migrate, uninstall or rollback\n  --register-plugin      Link native plugin during setup\n  --expected-hashes FILE Ownership hashes for legacy migration\n  --backup DIRECTORY     Migration snapshot for rollback\n\nCombo: combo show|set|reset [--provider ID] [--small-model ID --small-effort Auto|Low|Medium|High] [--medium-model ID --medium-effort Auto|Low|Medium|High] [--large-model ID --large-effort Auto|Low|Medium|High]\nModel changes default to Auto effort when effort is omitted. Combo set imports legacy policy files; reset replaces them with defaults.\n\nLearning (always requires --project PATH):\n  learning status|observations|rules\n  learning label --id OBSERVATION --need NEED --difficulty DIFFICULTY --evidence REFERENCE --split train|holdout --unit-id UNIT --yes\n  learning activate|rollback --id RULE --yes\n  learning purge --yes\n  learning configure --mode off|shadow|on [--yes]\nLabel, activate, rollback and purge require explicit --yes. Mode on also requires --yes. Default mode is shadow; audit interval is fixed at 10. Activation requires 3 train labels, 2 disjoint holdout labels and no conflicts. Setup never enables inference.');
     console.log('\nReport: report --project PATH (read-only crew routing counts and observed native usage; no prompts)\nLearning: learning report|feedback_options --project PATH\nVerified Small feedback: learning feedback --project PATH --run RUN --role ROLE --session SESSION --need NEED --difficulty DIFFICULTY --evidence REFERENCE --split train|holdout --unit-id UNIT --yes');
+    console.log('\nStorage: storage status (read-only) | cleanup [--dry-run | --yes] | compact --yes\nStorage commands use selected --state-dir / --profile; cleanup previews by default.');
     return;
   }
-  const action = ['combo','learning'].includes(command) && args[0] && !args[0].startsWith('--') ? args.shift() : command === 'learning' ? 'status' : 'show';
+  const action = ['combo','learning','storage'].includes(command) && args[0] && !args[0].startsWith('--') ? args.shift() : ['learning','storage'].includes(command) ? 'status' : 'show';
   const comboFlags = ['provider', ...['small','medium','large'].flatMap(name => [`${name}-model`, `${name}-effort`])];
   const changes = {};
   const valueOptions = {'--python':'python','--agent-dir':'agentDir','--state-dir':'state','--profile':'profile','--expected-hashes':'expectedHashes','--backup':'backup'};
@@ -39,15 +40,15 @@ try {
     if (Object.hasOwn(switches,arg)) options[switches[arg]] = true;
     else if (Object.hasOwn(valueOptions,arg) && args[0] && !args[0].startsWith('--')) options[valueOptions[arg]] = args.shift();
     else if (command === 'report' && arg === '--project' && args[0] && !args[0].startsWith('--')) options.project = args.shift();
-    else if (command === 'learning' && arg === '--yes') options.yes = true;
+    else if (['learning','storage'].includes(command) && arg === '--yes') options.yes = true;
     else if (command === 'learning' && Object.hasOwn(learningOptions,arg) && args[0] && !args[0].startsWith('--')) options[learningOptions[arg]] = args.shift();
     else if (command === 'combo' && action === 'set' && comboFlags.includes(arg.slice(2)) && arg.startsWith('--') && args[0] && !args[0].startsWith('--')) changes[arg.slice(2)] = args.shift();
-    else throw new Error(command === 'learning' ? 'Unknown or incomplete learning argument' : `Unknown or incomplete argument: ${arg}`);
+    else throw new Error(['learning','storage'].includes(command) ? `Unknown or incomplete ${command} argument` : `Unknown or incomplete argument: ${arg}`);
   }
-  if (!['setup', 'doctor', 'combo', 'learning', 'report', 'migrate', 'uninstall', 'rollback'].includes(command)) throw new Error('Usage: crews-omp setup|doctor|combo|learning|report|migrate|uninstall|rollback [options]');
+  if (!['setup', 'doctor', 'combo', 'learning', 'storage', 'report', 'migrate', 'uninstall', 'rollback'].includes(command)) throw new Error('Usage: crews-omp setup|doctor|combo|learning|storage|report|migrate|uninstall|rollback [options]');
   if (options.profile && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(options.profile)) throw new Error('Invalid profile name');
-  if (options.dryRun && !['migrate', 'uninstall', 'rollback'].includes(command)) throw new Error('--dry-run is supported by migrate, uninstall and rollback');
-  const result = command === 'combo' ? combo(action,changes) : command === 'learning' ? learning(action) : command === 'report' ? routingReport() : main();
+  if (options.dryRun && !['migrate', 'uninstall', 'rollback', 'storage'].includes(command)) throw new Error('--dry-run is supported by migrate, uninstall, rollback and storage cleanup');
+  const result = command === 'combo' ? combo(action,changes) : command === 'learning' ? learning(action) : command === 'storage' ? storage(action) : command === 'report' ? routingReport() : main();
   console.log(options.json ? JSON.stringify(result) : `${result.status || 'routing_report'}\n${JSON.stringify(result, null, 2)}`);
   if (result.ok === false) process.exitCode = 1;
 } catch (error) {
@@ -226,6 +227,38 @@ print(json.dumps(dispatch(json.load(sys.stdin)),separators=(',',':')))`;
   if(result.error || result.status !== 0) throw new Error('Learning operation failed; check runtime and request validity');
   try { return {status:`learning_${operation}`,...JSON.parse(result.stdout)}; } catch { throw new Error('Learning backend returned invalid response'); }
 }
+function storage(operation) {
+  if(!['status','cleanup','compact'].includes(operation)) throw new Error('Usage: crews-omp storage status|cleanup [--dry-run | --yes]|compact --yes');
+  if(options.dryRun && operation !== 'cleanup') throw new Error('--dry-run is supported only by storage cleanup');
+  if(options.yes && operation === 'status') throw new Error('Storage status does not accept --yes');
+  if(options.yes && options.dryRun) throw new Error('Storage cleanup accepts either --dry-run or --yes, not both');
+  if(operation === 'compact' && !options.yes) throw new Error('Storage compact requires explicit --yes');
+  if(options.offline || options.registerPlugin || options.expectedHashes || options.backup) throw new Error('Unsupported storage option');
+  const request = {operation};
+  if(operation === 'cleanup') request.dry_run = !options.yes;
+  const loc = locations();
+  let python;
+  try { python = readJSON(loc.runtime).python || options.python; } catch { throw new Error('Storage runtime registration is unreadable; run setup for selected profile'); }
+  if(!python) throw new Error('Provision isolated runtime with setup before storage commands (or pass --python)');
+  const script = String.raw`import json,sqlite3,sys
+sys.path.insert(0,sys.argv[1])
+try:
+    from crews.storage import dispatch
+    result=dispatch(json.load(sys.stdin))
+except sqlite3.Error as error:
+    busy=getattr(error,'sqlite_errorcode',0)&255 in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED)
+    result={'ok':False,'status':'busy' if busy else 'refused','error':'Storage database is busy' if busy else 'Storage database operation refused','action':'Stop active crews and close database readers, then retry' if busy else 'Check storage database integrity and permissions before retrying'}
+except ValueError as error:
+    busy=str(error) in ('storage: checkpoint busy','storage: busy; retry after active work finishes')
+    result={'ok':False,'status':'busy' if busy else 'refused','error':'Storage checkpoint is busy' if busy else 'Storage operation refused','action':'Stop active crews and close database readers, then retry' if busy else 'Check retention settings and resolve active work or unsafe storage state before retrying'}
+except Exception:
+    result={'ok':False,'status':'error','error':'Storage backend unavailable','action':'Check isolated runtime and storage access before retrying'}
+print(json.dumps(result,separators=(',',':')))`;
+  const result = spawnSync(python,['-B','-c',script,root],{input:JSON.stringify(request),encoding:'utf8',shell:false,windowsHide:true,maxBuffer:1024*1024,env:{...process.env,CREWS_OMP_HOME:loc.state,PYTHONUTF8:'1',PYTHONNOUSERSITE:'1',PYTHONDONTWRITEBYTECODE:'1'}});
+  if(result.error || result.status !== 0) return {ok:false,status:'error',operation,error:'Storage backend unavailable',action:'Check isolated runtime and storage access before retrying'};
+  try { return {status:`storage_${operation}`,operation,...JSON.parse(result.stdout)}; } catch { return {ok:false,status:'error',operation,error:'Storage backend returned invalid response',action:'Check installed package and isolated runtime before retrying'}; }
+}
+
 function yaml(python,file,op,values) {
  const result=run(python,['-c',yamlScript,JSON.stringify({file,op,values})],process.env,true);
  if(result.status!==0) throw new Error(`Cannot parse ${path.basename(file)} configuration`);

@@ -1,3 +1,15 @@
+# crews-omp 0.6.0 — compact storage
+
+- New dispatch stores admission/token binding and provider receipt in SQLite, no ticket/wire JSON. Final role result is stored once; earlier record files materialize only when a later wave needs upstream file context. Completion revokes admission and removes transient receipt rows.
+- Admission+token creation is one transaction. Trigger-failure regression proves insertion failure leaves role planned, not stranded admitted. Late receipt insertion rechecks current token/status under write lock. Legacy JSON tickets/receipts remain valid read-only until expiry, not issued for new work.
+- Storage status/dry-run are read-only; cleanup recomputes under lock, protects fresh/live/learning-backed state, archives full payloads after7days and caps summaries90days/1000runs. Learning protection holds a real readonly transaction through archive commit. Durable pending-file queue retries failed unlink even after run row archival. Symlink/unknown files preserved.
+- Compact refuses active work, uses exclusive SQLite locking/checkpoints and reports actual bytes. Automatic cleanup attempts run at most daily after new plan creation, auto_cleanup opt-out supported; no automatic compact/learning purge/backup or runtime deletion.
+- Storage regression covers dry-run bytes unchanged, active/live/protected observations, age/summary limits, SQL rollback, failed unlink retry, learning writer commit blocking, no-follow paths, checkpoint busy/refusal, actual reclaim. Archived history/report remain visible but cannot execute. SQLite-only lifecycle and native read/producer-write/Large-teacher flows pass.
+- Global preview/snapshot then cleanup archived52 expired runs and deleted339 legacy JSON files, pruned138 expired token bindings. Records113->41, tickets141->3, wire130->1; one unknown wire JSON retained/reported. Learning DB and key byte-identical. Compact1150976->430080bytes (720896reclaimed); initial pre-migration DB1089536bytes. Retained19protected runs. Numbers are a point-in-time cleanup result, not a storage-size guarantee.
+- Snapshot was SQLite backup API plus compressed legacy JSON under active state/backups, retained for recovery. Final packaging suite11passed0failed (124.7seconds), including actual provision/upgrade/relocation/uninstall/reinstall and storage admin gates. No public credentials or state included.
+
+## Historical 0.5.0 evidence
+
 # crews-omp 0.5.0 — bounded Small rollout
 
 - Eight Python contract scripts pass, including bounded implementation, verified feedback/current fingerprints, role-local routing, report usage coverage, UTF-8, replay and escalation. Shadow sampling tests prove teacher disagreement never changes declared answers and preview/off/dedup/caps hold.

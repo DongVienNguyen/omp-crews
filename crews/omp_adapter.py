@@ -6,7 +6,7 @@ import sqlite3
 import time
 import uuid
 import re
-from contextlib import contextmanager, closing
+from contextlib import contextmanager, closing, nullcontext
 from pathlib import Path
 from crews import catalog, planner, escalate as upstream_escalate
 
@@ -122,6 +122,8 @@ def database(state):
  db.execute('CREATE TABLE IF NOT EXISTS calls (run TEXT, role TEXT, digest TEXT, status TEXT, result TEXT, PRIMARY KEY(run,role))')
  db.execute('CREATE TABLE IF NOT EXISTS attempts (run TEXT, role TEXT, escalations INTEGER, repairs INTEGER, PRIMARY KEY(run,role))')
  db.execute('CREATE TABLE IF NOT EXISTS tickets (run TEXT, role TEXT, token TEXT, PRIMARY KEY(run,role))')
+ db.execute('CREATE TABLE IF NOT EXISTS admissions (token TEXT PRIMARY KEY,run TEXT,role TEXT,project TEXT,session TEXT,expires REAL,call TEXT)')
+ db.execute('CREATE TABLE IF NOT EXISTS receipts (token TEXT PRIMARY KEY,payload TEXT)')
  try:
   with db:yield db
  finally:db.close()
@@ -216,17 +218,23 @@ def build_plan(spec,answers,project,session,state=None):
   db.execute('INSERT INTO runs VALUES(?,?,?,?,?)',(run,project,session,time.time(),json.dumps(result)))
   for wave in waves:
    for call in wave['calls']:db.execute('INSERT INTO calls VALUES(?,?,?,?,?)',(run,call['role_id'],hashlib.sha256(call['prompt'].encode()).hexdigest(),'planned',None))
+ try:
+  from crews.maintenance import run as maintain_storage
+  result['storage_maintenance']=maintain_storage(state or home())
+ except (ValueError,OSError,sqlite3.Error):result['storage_maintenance']={'skipped':'busy or unavailable; inspect storage status'}
  return result
 
 def load_run(db,run,project,session):
  row=db.execute('SELECT project,session,created,plan FROM runs WHERE id=?',(run,)).fetchone()
+ if not row and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_summaries'").fetchone() and db.execute('SELECT 1 FROM run_summaries WHERE run=?',(run,)).fetchone():raise ValueError('run archived after expiry; summary is history only, create a fresh plan')
  if not row or row[0]!=canonical(project) or row[1]!=session:raise ValueError('run/project/session mismatch')
  if time.time()-row[2]>86400:raise ValueError('plan expired; create a fresh plan')
  return json.loads(row[3])
 
-def admit(run,role,prompt,project,session,state=None):
- with database(state or home()) as db:
-  db.execute('BEGIN IMMEDIATE');p=load_run(db,run,project,session)
+def admit(run,role,prompt,project,session,state=None,connection=None):
+ with (nullcontext(connection) if connection is not None else database(state or home())) as db:
+  if connection is None:db.execute('BEGIN IMMEDIATE')
+  p=load_run(db,run,project,session)
   current=next((w for w in p['waves'] if any(c['role_id']==role for c in w['calls'])),None)
   if current is None:raise ValueError('unknown role')
   cell=next(c for c in current['calls'] if c['role_id']==role)
@@ -241,6 +249,15 @@ def admit(run,role,prompt,project,session,state=None):
      target=Path(project)/file
      actual=hashlib.sha256(target.read_bytes()).hexdigest() if target.is_file() else None
      if actual!=expected:raise ValueError('prior role evidence stale: '+file)
+  # Existing upstream prompts reference earlier record paths; materialize only at handoff.
+  for wave in p['waves']:
+   if wave is current:break
+   for previous_call in wave['calls']:
+    data=db.execute('SELECT result FROM calls WHERE run=? AND role=?',(run,previous_call['role_id'])).fetchone()[0]
+    target=Path(p['records'][previous_call['role_id']]);root=(Path(state or home())/'records'/run).resolve()
+    if not target.resolve().is_relative_to(root):raise ValueError('record handoff escapes state directory')
+    target.parent.mkdir(parents=True,exist_ok=True);temporary=target.with_name(target.name+'.'+uuid.uuid4().hex+'.tmp')
+    temporary.write_text(data,encoding='utf-8');os.replace(temporary,target)
   digest=hashlib.sha256(prompt.encode()).hexdigest()
   active=db.execute("SELECT count(*) FROM calls WHERE run=? AND status='admitted'",(run,)).fetchone()[0]
   if active>=2:raise ValueError('two workers already active; wait for a recorded result')
@@ -261,10 +278,10 @@ def record(run,role,result,project,session,state=None):
   status='completed' if result['status']=='COMPLETE' else 'failed'
   changed=db.execute("UPDATE calls SET status=?,result=? WHERE run=? AND role=? AND status='admitted'",(status,json.dumps(result),run,role))
   if changed.rowcount!=1:raise ValueError('role was not admitted or already recorded')
-  target=Path(plan['records'][role]);target.parent.mkdir(parents=True,exist_ok=True)
-  temporary=target.with_name(target.name+'.'+uuid.uuid4().hex+'.tmp')
-  temporary.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
-  os.replace(temporary,target)
+  tokens=[r[0] for r in db.execute('SELECT token FROM admissions WHERE run=? AND role=?',(run,role))]
+  for token in tokens:db.execute('DELETE FROM receipts WHERE token=?',(token,))
+  db.execute('DELETE FROM admissions WHERE run=? AND role=?',(run,role))
+  db.execute('DELETE FROM tickets WHERE run=? AND role=?',(run,role))
  observation_id=cell.get('classification',{}).get('learning',{}).get('observation_id')
  if observation_id:
   from crews.learning import dispatch as learning_dispatch
@@ -295,6 +312,13 @@ def history(project,limit=50,state=None):
    roles=[{key:call.get(key) for key in ('role_id','model','reasoning_effort','role_answers','routing_reason')} for wave in plan['waves'] for call in wave['calls']]
    for role in roles:role['status']=statuses.get(role['role_id'])
    output.append({'run_id':run,'project':project,'session':session,'created':created,'roles':roles})
+  if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_summaries'").fetchone():
+   for run,session,created,raw in db.execute('SELECT run,session,created,summary FROM run_summaries WHERE project=? ORDER BY created DESC LIMIT ?',(project,limit)):
+    summary=json.loads(raw)
+    roles=[{'role_id':r['role_id'],'model':r.get('model'),'reasoning_effort':r.get('effort'),'role_answers':None,'routing_reason':'archived summary','status':r.get('status')} for r in summary['roles']]
+    output.append({'run_id':run,'project':project,'session':session,'created':created,'roles':roles,'archived':True})
+  output.sort(key=lambda row:(row['created'],row['run_id']),reverse=True)
+  output=output[:limit]
  return output
 
 def routing_report(project,state=None):
@@ -322,6 +346,20 @@ def routing_report(project,state=None):
      if known:report['native_usage'][key]=report['native_usage'].get(key,0)+value
    for escalations,repairs in db.execute('SELECT escalations,repairs FROM attempts WHERE run=?',(run,)):
     report['attempts']['escalations']+=escalations;report['attempts']['repairs']+=repairs
+  if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_summaries'").fetchone():
+   for raw, in db.execute('SELECT summary FROM run_summaries WHERE project=?',(project,)):
+    summary=json.loads(raw);report['runs']+=1
+    for cell in summary['roles']:
+     report['calls']+=1;combo=cell.get('combo','unknown')
+     for bucket in ('by_combo','by_effective_combo'):count(report[bucket],combo)
+     count(report['by_requested_combo'],'unknown');count(report['by_status'],cell.get('status','unknown'));count(report['by_source'],'archived')
+     usage=cell.get('usage') or {}
+     for key,alias in (('input','inputTokens'),('output','outputTokens'),('durationMs','durationMs')):
+      value=cell.get('duration_ms') if key=='durationMs' else usage.get(key,usage.get(alias))
+      known=isinstance(value,(int,float)) and not isinstance(value,bool) and 0<=value<float('inf')
+      report['native_usage_coverage'][key]['known' if known else 'unknown']+=1
+      if known:report['native_usage'][key]=report['native_usage'].get(key,0)+value
+    for key in ('repairs','escalations'):report['attempts'][key]+=summary.get('attempts',{}).get(key,0)
  return report
 
 def escalate(run,role,reason,project,session,repair=False,state=None):
@@ -348,29 +386,48 @@ def escalate(run,role,reason,project,session,repair=False,state=None):
   db.execute('UPDATE runs SET plan=? WHERE id=?',(json.dumps(plan),run))
   return {'run_id':run,'call':cell,'requires_new_admission':True,'requires_model_verification':True}
 
-def dispatch(run,role,project,session):
- with database(home()) as db:
+def dispatch(run,role,project,session,state=None):
+ with database(state or home()) as db:
+  db.execute('BEGIN IMMEDIATE')
   plan=load_run(db,run,project,session)
   cell=next(c for w in plan['waves'] for c in w['calls'] if c['role_id']==role)
- admit(run,role,cell['prompt'],project,session)
- token=uuid.uuid4().hex
- with database(home()) as db:db.execute('INSERT OR REPLACE INTO tickets VALUES(?,?,?)',(run,role,token))
- value={'token':token,'run':run,'role':role,'project':canonical(project),'session':session,'expires':time.time()+1800,'call':cell}
- folder=home()/'tickets';folder.mkdir(exist_ok=True)
- (folder/(token+'.json')).write_text(json.dumps(value),encoding='utf-8')
- return value
+  admit(run,role,cell['prompt'],project,session,state,db)
+  token=uuid.uuid4().hex;expires=time.time()+1800
+  db.execute('INSERT OR REPLACE INTO tickets VALUES(?,?,?)',(run,role,token))
+  db.execute('INSERT INTO admissions VALUES(?,?,?,?,?,?,?)',(token,run,role,canonical(project),session,expires,json.dumps(cell)))
+ return {'token':token,'run':run,'role':role,'project':canonical(project),'session':session,'expires':expires,'call':cell}
 
-def ticket(token,project):
+def ticket(token,project,state=None):
  if len(token)!=32 or any(c not in '0123456789abcdef' for c in token):raise ValueError('invalid ticket')
- target=home()/'tickets'/(token+'.json')
- if not target.exists():raise ValueError('missing ticket')
- value=json.loads(target.read_text(encoding='utf-8'))
- if value['expires']<time.time() or value['project']!=canonical(project):raise ValueError('expired or foreign ticket')
- validate_model(value['call'])
- with database(home()) as db:
-  load_run(db,value['run'],project,value['session'])
-  row=db.execute('SELECT status FROM calls WHERE run=? AND role=?',(value['run'],value['role'])).fetchone()
-  if not row or row[0]!='admitted':raise ValueError('ticket not active')
+ with database(state or home()) as db:
+  row=db.execute('SELECT run,role,project,session,expires,call FROM admissions WHERE token=?',(token,)).fetchone()
+  if row:
+   value={'token':token,'run':row[0],'role':row[1],'project':row[2],'session':row[3],'expires':row[4],'call':json.loads(row[5])}
+  else:
+   target=Path(state or home())/'tickets'/(token+'.json')
+   if not target.is_file():raise ValueError('missing ticket')
+   value=json.loads(target.read_text(encoding='utf-8'))
+  if value['expires']<time.time() or value['project']!=canonical(project):raise ValueError('expired or foreign ticket')
+  validate_model(value['call'],state);load_run(db,value['run'],project,value['session'])
+  status=db.execute('SELECT status FROM calls WHERE run=? AND role=?',(value['run'],value['role'])).fetchone()
+  if not status or status[0]!='admitted':raise ValueError('ticket not active')
   binding=db.execute('SELECT token FROM tickets WHERE run=? AND role=?',(value['run'],value['role'])).fetchone()
   if not binding or binding[0]!=token:raise ValueError('ticket was revoked by a new attempt')
  return value
+
+def store_receipt(token,project,payload,state=None):
+ admitted=ticket(token,project,state);cell=admitted['call']
+ if not isinstance(payload,dict) or payload.get('token')!=token or payload.get('role')!=admitted['role'] or payload.get('model')!=cell['model'] or payload.get('effort')!=cell['reasoning_effort'] or payload.get('provider')!=cell['provider']:raise ValueError('invalid provider receipt')
+ with database(state or home()) as db:
+  db.execute('BEGIN IMMEDIATE')
+  binding=db.execute("SELECT t.token FROM tickets t JOIN calls c ON c.run=t.run AND c.role=t.role WHERE t.run=? AND t.role=? AND c.status='admitted'",(admitted['run'],admitted['role'])).fetchone()
+  if not binding or binding[0]!=token:raise ValueError('receipt admission completed or revoked')
+  db.execute('INSERT OR REPLACE INTO receipts VALUES(?,?)',(token,json.dumps(payload)))
+ return {'stored':True}
+
+def receipt(token,project,state=None):
+ ticket(token,project,state)
+ with database(state or home()) as db:row=db.execute('SELECT payload FROM receipts WHERE token=?',(token,)).fetchone()
+ if row:return json.loads(row[0])
+ legacy=Path(state or home())/'wire'/(token+'.json')
+ return json.loads(legacy.read_text(encoding='utf-8')) if legacy.is_file() else None

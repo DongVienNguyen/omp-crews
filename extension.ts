@@ -94,8 +94,7 @@ export default function(pi:any){
   wireOK=model===child.call.model&&effort===child.call.reasoning_effort&&ctx.model?.provider===(child.call.provider??'9router');
   if(!wireOK){ctx.abort();throw Error('Crew model or effort drift');}
   const receipt={model,effort,provider:ctx.model?.provider,role:child.role,token:child.token,time:Date.now()};
-  fs.mkdirSync(path.join(settings.state,'wire'),{recursive:true});
-  fs.writeFileSync(path.join(settings.state,'wire',child.token+'.json'),JSON.stringify(receipt));
+  bridge({op:'store_receipt',token:child.token,project:ctx.cwd,payload:receipt});
  });
  pi.on('tool_call',(event:any,ctx:any)=>{
   if(!isChild(ctx)){
@@ -165,8 +164,7 @@ export default function(pi:any){
    const started=performance.now();
    const result=await ctx.invokeTool({context:`Independent role; use only its brief. [crew-ticket:${active.token}]`,tasks:[{agent:active.call.agent_type,task:active.call.prompt,solutionSpace:'Execute the explicit role brief; model and effort come from the admitted plan.',outputSchema:{type:'object',properties:{status:{type:'string',enum:['COMPLETE','PARTIAL','BLOCKED','FAILED']},verification:{type:'array',items:{type:'string'}}},required:['status','verification']},schemaMode:'strict'}]},{signal,onUpdate:update});
    const rows=result.details?.results;
-   const row=rows?.[0];const proofPath=path.join(settings.state,'wire',active.token+'.json');
-   const proof=fs.existsSync(proofPath)?JSON.parse(fs.readFileSync(proofPath,'utf8')):null;
+   const row=rows?.[0];const proof=bridge({op:'receipt',token:active.token,project:ctx.cwd});
    let payload=row?.structuredOutput?.data;
    if(!payload){try{payload=JSON.parse(row?.output||'');}catch{}}
    const verified=proof?.model===active.call.model&&proof?.effort===active.call.reasoning_effort;

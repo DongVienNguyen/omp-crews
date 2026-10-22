@@ -126,6 +126,33 @@ Capacity is 10000 observations / bounded SQLite pages; full capacity drops new o
 
 The conservative thresholds and periodic audit are guardrails, not a statistical guarantee. To broaden generalization, collect a representative independent labeled corpus first; no rules are synthesized from one teacher answer.
 
+## Compact storage (0.6.0)
+
+SQLite is the source of truth for new admissions, wire receipts and role results. New runs do not create ticket/wire JSON files. Completed results are not duplicated as records unless a later wave needs the upstream record-path handoff. Legacy JSON tickets remain readable only while valid/current, then retention removes owned expired copies.
+
+```text
+crews-omp storage status --json
+crews-omp storage cleanup --dry-run --json
+crews-omp storage cleanup --yes --json
+crews-omp storage compact --yes --json
+```
+
+Cleanup without --yes is a preview; --yes and --dry-run conflict. Status/preview do not create state or mutate SQLite/WAL. They report busy rather than read an uncheckpointed WAL unsafely. Retry after workers/readers finish. Compact requires no live admission/legacy ticket or recently admitted work, uses exclusive SQLite locking, checks WAL checkpoint results and reports actual reclaimed bytes. It never runs automatically while a task is executing.
+
+Optional active-state `storage.json`:
+
+```json
+{"payload_days":7,"summary_days":90,"max_runs":1000,"auto_cleanup":true}
+```
+
+Full expired run payloads older than7days become minimal per-role status/Combo/model/effort/usage/attempt summaries; summaries retain90days and at most1000runs. Live admissions, runs younger24h and runs backing labeled observations/candidate or active learned rules remain full. Protected data may exceed the limit; it is not silently evicted. Archived summaries remain visible in history/report but cannot dispatch, repair or become verified feedback without original evidence. Unknown fields/retention outside safe ranges refuse cleanup.
+
+Legacy tickets/wire expire after their own deadline plus1h grace. Owned materialized records need run age48h and file age24h, no live protection. Symlinks, unexpected filenames and paths outside the owned subtree are preserved/reported, not followed. Cleanup rechecks under a write transaction and unlinks only after SQL commit. File failures are visible; no learning DB/key, credentials, policy, runtime, rollback backup or venv is removed.
+
+New plan creation triggers at most one cleanup attempt per24h when auto_cleanup true; no background watcher or model call. Disable it in storage.json for manual-only maintenance. Run explicit compact after meaningful pruning, not per tool call. SQLite may keep free pages until compact: file size alone is not active data size. Runtime venvs and migration snapshots are separate retained installation assets, not disposable JSON logs; old runtime deletion is not automatic while sessions may still use them.
+
+Before first real cleanup keep a snapshot. Commands target active profile/state, use --state-dir for an isolated preview. Learning retention and purge remain separate and explicit. Current-state integrity and active guards are verified before reclaim; no old run becomes executable because a ticket row was removed.
+
 ## Safety and verification
 
 Extension tool checks are not an OS sandbox; read scope is not a secrets boundary. Exact commands may execute mutable project scripts. Check roles should use trusted narrow commands, not producer-controlled code. Receipts prove requested model/effort and native output, not router backend identity. Stale prior-role fingerprints intentionally refuse admission: reconcile current files and create fresh scoped check, never rewrite historical evidence to PASS.

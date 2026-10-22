@@ -76,6 +76,86 @@ test('learning commands require project and explicit admin confirmation before r
   } finally {fs.rmSync(temp,{recursive:true,force:true});}
 });
 
+test('storage commands validate destructive gates before runtime access without provisioning', () => {
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'crews-storage-gates-'));
+  const state=path.join(temp,'state');
+  const env={...process.env,CREWS_OMP_HOME:state,CREWS_OMP_USER_HOME:temp,OMP_PROFILE:'',PI_PROFILE:''};
+  const call=(...args)=>{const result=execute(process.execPath,[path.join(source,'bin/crews-omp.mjs'),'storage',...args,'--json'],env);return {...result,data:JSON.parse(result.stdout)};};
+  try {
+    for(const args of [['unknown'],['compact'],['status','--yes'],['status','--dry-run'],['compact','--yes','--dry-run'],['cleanup','--yes','--dry-run'],['cleanup','--yes','false'],['cleanup','--project',temp],['status','--profile','../bad'],['cleanup','--offline']]) {
+      const refused=call(...args); assert.equal(refused.status,1); assert.equal(refused.data.ok,false); assert.ok(!/Provision isolated runtime/.test(refused.data.error));
+    }
+    for(const args of [[],['status'],['cleanup'],['cleanup','--dry-run'],['cleanup','--yes'],['compact','--yes']]) {
+      const missing=call(...args); assert.equal(missing.status,1); assert.match(missing.data.error,/Provision isolated runtime/);
+    }
+    assert.ok(!fs.existsSync(state),'invalid storage commands and missing runtime must not create state');
+    for(const args of [[],['status'],['cleanup'],['cleanup','--dry-run']]) {
+      const result=call(...args,'--python',python); assert.equal(result.status,0,result.stdout+result.stderr);
+      if(args[0]==='cleanup') assert.equal(result.data.dry_run,true);
+      assert.ok(!fs.existsSync(state),'storage status and cleanup preview must not initialize state or learning');
+    }
+  } finally {fs.rmSync(temp,{recursive:true,force:true});}
+});
+
+test('storage CLI honors profile and state, previews cleanup, compacts, and preserves unrelated state', () => {
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'crews-storage-'));
+  const profileState=path.join(temp,'.omp/profiles/work/crews-omp');
+  const state=path.join(temp,'selected');
+  const env={...process.env,CREWS_OMP_HOME:'',CREWS_OMP_USER_HOME:temp,PI_CONFIG_DIR:'.omp',OMP_PROFILE:'',PI_PROFILE:''};
+  const call=(...args)=>{const result=execute(process.execPath,[path.join(source,'bin/crews-omp.mjs'),'storage',...args,'--json'],env);return {...result,data:JSON.parse(result.stdout)};};
+  const success=result=>assert.equal(result.status,0,result.stdout+result.stderr);
+  const snapshot=dir=>fs.readdirSync(dir,{recursive:true,withFileTypes:true}).filter(entry=>entry.isFile()).map(entry=>{const file=path.join(entry.parentPath || entry.path,entry.name);const stat=fs.statSync(file);return [path.relative(dir,file),fs.readFileSync(file).toString('hex'),stat.mtimeMs];}).sort((a,b)=>a[0].localeCompare(b[0]));
+  try {
+    const profile=call('status','--profile','work','--python',python); success(profile); assert.equal(profile.data.state,profileState); assert.ok(!fs.existsSync(profileState));
+    const selected=call('status','--profile','work','--state-dir',state,'--python',python); success(selected); assert.equal(selected.data.state,state); assert.ok(!fs.existsSync(state));
+    fs.mkdirSync(state,{recursive:true});
+    fs.writeFileSync(path.join(state,'runtime.json'),JSON.stringify({python}));
+    const fixture=String.raw`import json,sqlite3,sys,time
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from crews.omp_adapter import database
+from crews.learning import dispatch
+state=Path(sys.argv[2])
+with database(state) as db:
+    db.execute('CREATE TABLE storage_fixture (payload BLOB)')
+    db.executemany('INSERT INTO storage_fixture VALUES (?)',[(b'x'*4096,)]*128)
+    db.execute('DELETE FROM storage_fixture')
+dispatch({'operation':'status','project':sys.argv[3]})
+for name in ('tickets','wire','backups'):(state/name).mkdir(exist_ok=True)
+token='a'*32
+(state/'tickets'/f'{token}.json').write_text(json.dumps({'token':token,'run':'b'*32,'expires':time.time()-7200}))
+(state/'wire'/f'{token}.json').write_text('{"private":"NEVER_PRINT_STORAGE_SECRET"}')
+(state/'config.json').write_text('{"private":"NEVER_PRINT_STORAGE_SECRET"}')
+(state/'backups'/'keep.json').write_text('{"private":"NEVER_PRINT_STORAGE_SECRET"}')
+(state/'unknown.json').write_text('NEVER_PRINT_STORAGE_SECRET')`;
+    success(execute(python,['-B','-c',fixture,source,state,temp],{...env,CREWS_OMP_HOME:state,PYTHONDONTWRITEBYTECODE:'1'}));
+    const protectedFiles=['runtime.json','learning.key','learning.sqlite','config.json','backups/keep.json','unknown.json'];
+    const preserved=Object.fromEntries(protectedFiles.map(file=>[file,fs.readFileSync(path.join(state,file))]));
+    const before=snapshot(state);
+    const status=call('status','--state-dir',state); success(status); assert.equal(status.data.database.exists,true); assert.deepEqual(snapshot(state),before,'status must not write, checkpoint, initialize, or infer');
+    for(const args of [[],['--dry-run']]) {
+      const preview=call('cleanup',...args,'--state-dir',state); success(preview); assert.equal(preview.data.dry_run,true); assert.ok(preview.data.deleted_files.length>=2); assert.deepEqual(snapshot(state),before,'preview must leave all files unchanged');
+    }
+    const cleanup=call('cleanup','--yes','--state-dir',state); success(cleanup); assert.equal(cleanup.data.dry_run,false); assert.ok(!fs.existsSync(path.join(state,'tickets',`${'a'.repeat(32)}.json`))); assert.ok(!fs.existsSync(path.join(state,'wire',`${'a'.repeat(32)}.json`)));
+    const compact=call('compact','--yes','--state-dir',state); success(compact); assert.ok(compact.data.before_bytes>=compact.data.after_bytes); assert.ok(compact.data.reclaimed_bytes>0);
+    for(const [file,content] of Object.entries(preserved)) assert.deepEqual(fs.readFileSync(path.join(state,file)),content,`${file} must remain byte-identical`);
+    for(const result of [status,cleanup,compact]) assert.ok(!result.stdout.includes('NEVER_PRINT_STORAGE_SECRET'));
+    assert.ok(!fs.existsSync(profileState));
+    const active=path.join(state,'tickets',`${'c'.repeat(32)}.json`);
+    fs.writeFileSync(active,JSON.stringify({token:'c'.repeat(32),run:'d'.repeat(32),expires:Date.now()/1000+3600,private:'NEVER_PRINT_STORAGE_SECRET'}));
+    const refused=call('compact','--yes','--state-dir',state); assert.equal(refused.status,1); assert.equal(refused.data.status,'refused'); assert.ok(refused.data.action); assert.ok(!refused.stdout.includes('NEVER_PRINT_STORAGE_SECRET')); fs.rmSync(active);
+    const locked=String.raw`import json,sqlite3,subprocess,sys
+db=sqlite3.connect(sys.argv[1])
+db.execute('BEGIN IMMEDIATE')
+try:
+    result=subprocess.run(sys.argv[2:],capture_output=True,text=True,timeout=60)
+    print(json.dumps({'status':result.returncode,'stdout':result.stdout,'stderr':result.stderr}))
+finally:db.rollback();db.close()`;
+    const lockResult=execute(python,['-B','-c',locked,path.join(state,'runs.sqlite'),process.execPath,path.join(source,'bin/crews-omp.mjs'),'storage','compact','--yes','--state-dir',state,'--json'],env); success(lockResult);
+    const busy=JSON.parse(lockResult.stdout); assert.equal(busy.status,1); const busyData=JSON.parse(busy.stdout); assert.equal(busyData.status,'busy'); assert.ok(busyData.action); assert.ok(!busy.stdout.includes('NEVER_PRINT_STORAGE_SECRET'));
+  } finally {fs.rmSync(temp,{recursive:true,force:true});}
+});
+
 test('learning CLI keeps labels explicit, activation gated and project data private', () => {
   const temp=fs.mkdtempSync(path.join(os.tmpdir(),'crews-learning-')); const state=path.join(temp,'state');
   const env={...process.env,CREWS_OMP_HOME:state,CREWS_OMP_USER_HOME:temp,OMP_PROFILE:'',PI_PROFILE:''};

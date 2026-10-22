@@ -1,6 +1,6 @@
 {
   "name": "crews-omp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Policy-gated Crews planning and native OMP agents",
   "type": "module",
   "license": "MIT",
