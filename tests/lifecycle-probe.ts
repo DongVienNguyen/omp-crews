@@ -1,0 +1,49 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import loadCrews from '../extension.ts';
+import {resolveRuntime} from '../runtime-paths.mjs';
+import {callBridge} from '../bridge-client.mjs';
+export default function(pi:any){
+ pi.registerCommand('crew-lifecycle-check',{description:'Offline isolated lifecycle acceptance',handler:async(_args:any,host:any)=>{
+  const base=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+  const runtime=resolveRuntime(base);
+  assert.ok(process.env.CREWS_OMP_HOME?.includes('test'),'Must use isolated test state');
+  const hooks:any={},tools:any={},entries:any[]=[];
+  loadCrews({zod:pi.zod,on:(n:string,f:any)=>hooks[n]=f,registerTool:(t:any)=>tools[t.name]=t,registerCommand:()=>{},getAllTools:()=>[],appendEntry:(type:any,data:any)=>entries.push({type,data})});
+  const cwd=host.cwd;const ctx:any={cwd,agent:{kind:'main'},model:{id:'code-sol',provider:'9router'},sessionManager:{getSessionId:()=> 'lifecycle'},invokeTool:async()=>({details:{results:[]},content:[]})};
+  hooks.before_agent_start({},ctx);
+  hooks.tool_call({toolName:'write',toolCallId:'bad',input:{path:'xd://mcp__crews_omp_crew_plan'}},ctx);
+  assert.equal(hooks.tool_call({toolName:'task',input:{}},ctx).block,true);
+  hooks.tool_result({toolCallId:'bad',isError:true},ctx);
+  assert.equal(hooks.tool_call({toolName:'task',input:{}},ctx).block,true);
+  const input:any={intake:{spec:{task:'Read fixture values',roles:[{name:'fixture-reader',kind:'research',mission:'Read fixture values and report observed value',deliverable:'fixture.json',scope:[],commands:[],acceptance:['Read fixture value'],classification:true,solution_space:'One named read',facts:{information_only:true,targets_fixed:true,behavior_undecided:false,unknown_cause:false,consequential_judgment:false},answers:{divisible:0,specific:1}}]},answers:{need:{choice:'bounded_retrieval',confidence:1,probabilities:{bounded_retrieval:1}},difficulty:{score:1},divisible:{noul:0},needs_verifier:{noul:0}},session:'offline-lifecycle'}};
+  const intake=await tools.task.execute('repair',input,undefined,undefined,ctx);
+  const plan=intake.details.plan;assert.equal(plan.waves[0].calls[0].model,'code-seek');
+  assert.deepEqual(plan.waves[0].calls[0].declared_role_answers,{divisible:0,specific:1});
+  assert.equal(hooks.tool_call({toolName:'task',input:{}},ctx),undefined);
+  let captured:any;
+  ctx.invokeTool=async(params:any)=>{
+   captured=params;
+   const spawn=hooks.before_subagent_spawn({agent:'crew-research-seek',invocationKind:'task'},ctx);
+   assert.equal(spawn.model,'9router/code-seek:high');
+   assert.equal(hooks.before_subagent_spawn({agent:'crew-research-seek',invocationKind:'task'},ctx).block,true);
+   const child:any={...ctx,agent:{kind:'sub',name:'crew-research-seek'},model:{provider:'9router'},abort:()=>{throw Error('Unexpected abort');}};
+   hooks.before_agent_start({prompt:params.context},child);
+   assert.throws(()=>hooks.before_provider_request({payload:{model:'code-sol',reasoning_effort:'high'}},child),/Unexpected abort/);
+   hooks.before_provider_request({payload:{model:'code-seek',reasoning_effort:'high'}},child);
+   assert.equal(hooks.tool_call({toolName:'bash',input:{command:'echo unauthorized'}},child).block,true);
+   return {content:[],details:{results:[{exitCode:0,resolvedModel:'9router/code-seek:high',resolvedModelIdentity:'9router/code-seek',resolvedThinkingLevel:'high',structuredOutput:{data:{status:'COMPLETE',verification:['Scripted local provider completed fixture contract']}}}]}};
+  };
+  const ref={run:plan.run_id,role:'fixture-reader',session:plan.session};
+  await tools.task.execute('dispatch',{crew:ref},undefined,undefined,ctx);
+  assert.equal(captured.tasks[0].agent,'crew-research-seek');
+  const rows=callBridge(runtime,base,{op:'results',run:ref.run,session:ref.session,project:cwd});
+  assert.equal(rows[0].status,'completed');assert.equal(rows[0].result.wire.effort,'high');
+  await assert.rejects(()=>tools.task.execute('replay',{crew:ref},undefined,undefined,ctx),/already admitted/);
+  const output={ok:true,checks:['failed-plan recovery','canonical intake','declared/effective evidence','one-spawn admission','model drift refusal','tool authority','native structured completion','replay refusal'],providerCalls:0};
+  if(process.env.CREWS_TEST_OUTPUT)fs.writeFileSync(process.env.CREWS_TEST_OUTPUT,JSON.stringify(output));
+  host.ui.notify(JSON.stringify(output),'info');
+ }});
+}

@@ -1,0 +1,8 @@
+{
+  "provider": "9router",
+  "models": {
+    "haiku": "code-seek",
+    "sonnet": "code-sol",
+    "opus": "code-astra"
+  }
+}
