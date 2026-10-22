@@ -4,7 +4,9 @@ Portable OMP Crews plugin. Policy-gated planning, per-role classification, nativ
 
 ## Install from Git
 
-Requires OMP native plugin discovery, Node.js 20+, Python 3.12+, and OMP provider credentials configured separately. Windows x64 is verified; other OS support is unverified.
+Requires OMP native plugin discovery, Node.js 20+, Python 3.12+, and an OMP provider/model configuration with credentials already set up. Installing this Git plugin does not create `models.yml`, authenticate a provider, or copy credentials. Windows x64 is verified; other OS support is unverified.
+
+Minimum clean-machine sequence: install OMP, configure/login to your provider and define the three model IDs/effort capabilities in OMP's active `models.yml`, then install/link this plugin and run setup. A clean OMP home without a provider intentionally stops with `No default model selected`; this is a host prerequisite, not a plugin success.
 
 ```text
 omp plugin install https://github.com/DongVienNguyen/omp-crews.git --scope user
