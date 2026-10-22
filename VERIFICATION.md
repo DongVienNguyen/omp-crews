@@ -1,0 +1,31 @@
+# Verification — crews-omp 0.2.0
+
+## Exercised implementation evidence
+
+- Python classification: 16 Vietnamese/English corpus cases, explicit precedence, tri-state safety contradictions, d1/1.001 and d2.49/2.5 boundaries, pure preview, automatic intake, project-scoped history, bridge UTF-8.
+- Existing remap, repair/escalation, stale producer refusal, native replay guard, MCP schema/errors and legacy unsupported model checks pass.
+- JS classifier checks exercise off/no calls, strict schema, cache/policy/context invalidation, timeout, cancellation and late reload refusal. Write-scope check verifies all hashline targets and disallows move/escape.
+- Fresh native OMP source package: cold status and deterministic preview returned Seek/high without creating child; canonical intake created run 8be76323e22f4a90a24ae0b255690a78, then native Seek/high child read source and returned COMPLETE.
+- Synthetic live semantic recommendation: Seek/high through OMP completeSimple, 8000ms deadline, maxTokens256; bounded lookup recommendation returned valid JSON at 7571ms with input3079/output39/reasoning9 tokens. This is capability/limit smoke, not a representative classifier-quality or cost benchmark. Global semantic mode remains off.
+- Windows MCP SDK requires pywin32 due to eager client imports. Lock includes it only with sys_platform == win32; no SDK patch/fake API.
+
+## Limits
+
+- Windows x64 is the exercised host. Linux/macOS paths are implemented with platform APIs and dependency markers, but no non-Windows host acceptance has run; no universal OS support claim.
+- Classifier success does not prove minimum-capability choice is always correct. Deterministic rules run first, unknown facts remain unknown, explicit classifications/authority stay validated. No real-task quality/cost savings claim.
+- OMP extension checks are not an OS sandbox. Exact admitted commands and file scope do not prevent all shell/script-side effects.
+- Native model/effort receipts prove OMP request routing and structured completion, not backend identity behind gateway aliases.
+- Public Git/npm release is not performed. Local package install/reinstall is the delivery route.
+
+## Packaging and installed-plugin evidence
+
+- Packaging suite: 5 passed, 0 failed (final observed 89.9 seconds): side-effect-free help, profile/custom-agent config root consistency, transaction rollback, actual isolated Python venv, offline repeat, relocation, custom provider/model policy, reordered MCP semantics, owner migration refusal/cleanup, crash-prepared snapshot rollback with changed-file refusal, real 0.2.0->0.2.1 runtime upgrade preserving old venv/state/policy, uninstall failure recovery, uninstall/reinstall and actual SDK stdio/schema/catalog doctor handshake.
+- Actual packed artifact extracted into a clean home with Vietnamese characters and spaces, linked through OMP and provisioned with a new private venv. Packed check_classification.py and check_lifecycle.mjs passed from that relocated package, not the source tree.
+- Local scripted HTTP provider acceptance uses actual OMP main loop/native TaskTool/child read/strict JSON and verified receipt. It sends no cloud inference or user credentials. Separate offline host callback probe covers failure recovery, canonical intake, one-spawn ticket, model drift, tool scope and replay refusal.
+- Global installation migrated to native plugin with an owner-file snapshot under the active state backups directory. Old extension/MCP/managed copies removed only after native link confirmation; state history retained. Doctor reports ready.
+- Actual global plugin model receipts: Seek/high run d04b6ae2ab844744875ecd1f9042ef13; Sol/low run 0ac96ffddecb41649cec83bdc70aee03; Astra/low run 713d00b64fdb46c6a23575435801c054. All completed with matching wire provider/model/effort and native exit0.
+- Current OMP does not accept direct .tgz plugin install: extract then link the permanent package directory. No unsupported install command is claimed. Windows tar.exe failed Unicode paths; Python tarfile stdlib extraction succeeded.
+- Full generic-spawn auto-routing is intentionally not implemented: canonical intake owns exact tool-call identity and authority; ordinary/named/speculative/eval paths remain unchanged/no-remap and cannot escape a failed plan. No FIFO correlation guessed.
+- Native OMP currently requests strict output but does not expose structuredOutput metadata in every returned row. Completion validates parsed JSON status/evidence plus native/wire receipts; this is not a claim of provider-enforced JSON-schema validation.
+- Semantic global mode remains off. The corpus/lifecycle proves deterministic behavior and safety, not a paired real-task quality/cost benchmark. Semantic shadow/recommend requires explicit opt-in; it was exercised only in isolated synthetic smoke.
+- Final lifecycle review issues corrected: transactional uninstall/relink recovery, explicit validated snapshot rollback, platform-correct config root/path comparison, semantic MCP equality, sanitized pip errors, runtime owner/profile validation. No unrelated automatic data cleanup added.

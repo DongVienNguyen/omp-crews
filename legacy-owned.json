@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "files": {
+    "agents/crew-check-astra.md": "66da64cfbfaeba2e9a099e2f23dd26a3ea8aa283a52462988d0d58849f9b1c24",
+    "agents/crew-check-seek.md": "0aef69e109fda712cd9573ebef7fab3f4801910ebd6dbe48d18912647b3af6bd",
+    "agents/crew-check-sol.md": "c3800a1e2dc40c75421bcee6d266ad0a4d7628536576f16da7dddd3ab83df9f2",
+    "agents/crew-integrate-astra.md": "c175f9b7672abc744ac711e1f93b8b531eb57ce75c266ea7f69e1f4da9fad755",
+    "agents/crew-integrate-seek.md": "cddabe0f26fc1047963698a7d96080f520be9394cd84cc009bbafc2aa6c8c847",
+    "agents/crew-integrate-sol.md": "d6bb00fbbd990d48ac2c25cf3151f017db37589676921c6f9a12683318284950",
+    "agents/crew-produce-astra.md": "c1e007ba3d8f610bc3060e5d87ca043f46e8c09b8287a94ca520cd6788c51b35",
+    "agents/crew-produce-seek.md": "320a9d39d536397493e2e2cccd35ec62101d6fb3d7e98ee68c205f58b322d825",
+    "agents/crew-produce-sol.md": "7ff37c7f57d273727b78bf3a5c6057371d9f49dcfc7ed6ffc1d4ab20bab5aae2",
+    "agents/crew-research-astra.md": "4eafc692d0c82cc2e07831de3c5a78ce2206fee23db23f3fcbc938161c1cccff",
+    "agents/crew-research-seek.md": "d9db412f08036d1a0a48c96df65fd2ea58f4fa8048a5be826c3f20c49868347b",
+    "agents/crew-research-sol.md": "c02c17b6cff408268cd4347df5b1e1157a4b776a480935189b5351e484fef719",
+    "skills/crew-omp/SKILL.md": "84ca8e6af3138f1ac2309c576118c2002d07e424498f3458dee6696a706ec327"
+  }
+}

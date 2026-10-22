@@ -1,0 +1,7 @@
+crews-omp includes the deterministic Crews Python core from mdalexandre/crews (MIT).
+Original license is retained in LICENSE.
+
+Routing design was informed by sdananjay/omp-task-router v0.1.2,
+commit 59ddb828bf1e9271618462ed9b68cda600df207d (MIT).
+This package does not install that extension or use a second routing authority.
+The local classifier and guard integration retain Crews admission and effort policy.

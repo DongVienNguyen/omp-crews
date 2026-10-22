@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
+import {Classifier,DEFAULT_CLASSIFIER,parseRecommendation} from './classifier.mjs';
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'crews-classifier-'));
+try {
+ const role={kind:'research',mission:'List named config values',solution_space:'Exact known file',inputs:['x.txt']};
+ fs.writeFileSync(path.join(root,'x.txt'),'a');
+ let calls=0;
+ const c=new Classifier(async()=>{calls++;return {text:'{"need":"bounded_retrieval","difficulty":1,"reason":"known lookup"}',stopReason:'stop',usage:{totalTokens:12}};});
+ const cfg={...DEFAULT_CLASSIFIER,mode:'recommend'};
+ assert.equal((await c.recommend(role,root,'s','v1',DEFAULT_CLASSIFIER)).outcome,'off');assert.equal(calls,0);
+ assert.equal((await c.recommend(role,root,'s','v1',cfg)).recommendation.need,'bounded_retrieval');
+ assert.equal((await c.recommend(role,root,'s','v1',cfg)).cacheHit,true);assert.equal(calls,1);
+ fs.writeFileSync(path.join(root,'x.txt'),'b');await c.recommend(role,root,'s','v1',cfg);assert.equal(calls,2);
+ await c.recommend({...role,solution_space:'unknown'},root,'s','v1',cfg);assert.equal(calls,3);
+ await c.recommend(role,root,'s','v2',cfg);assert.equal(calls,4);
+ assert.throws(()=>parseRecommendation('```json\n{}\n```'));
+ assert.throws(()=>parseRecommendation('{"need":"bounded_retrieval","difficulty":0,"reason":"x","model":"evil"}'));
+ const slow=new Classifier(()=>new Promise(()=>{}));
+ assert.equal((await slow.recommend(role,root,'s','v1',{...cfg,timeoutMs:5})).outcome,'requires_classification');
+ const cachedAbort=new AbortController();cachedAbort.abort();assert.equal((await c.recommend(role,root,'s','v2',cfg,cachedAbort.signal)).outcome,'requires_classification');
+ const abort=new AbortController();abort.abort();assert.equal((await c.recommend(role,root,'s2','v1',cfg,abort.signal)).outcome,'requires_classification');
+ let finish;const late=new Classifier(()=>new Promise(resolve=>finish=resolve));const pending=late.recommend(role,root,'s','v1',cfg);late.reload();finish({text:'{"need":"bounded_retrieval","difficulty":1,"reason":"x"}',stopReason:'stop'});assert.equal((await pending).outcome,'requires_classification');
+ console.log('PASS: classifier off/cache/context/strict-output/timeout/abort/reload boundaries');
+} finally {fs.rmSync(root,{recursive:true,force:true});}
