@@ -7,7 +7,7 @@ const root=fs.mkdtempSync(path.join(os.tmpdir(),'crews-bounds-'));
 try {
  const role={kind:'research',mission:'Read named file',answers:{divisible:0,specific:1}};
  const off=new Classifier(()=>{throw Error('must not call');});
- assert.equal((await off.recommend(role,root,'s','p',DEFAULT_CLASSIFIER)).outcome,'off');
+ assert.equal((await off.recommend(role,root,'s','p',{...DEFAULT_CLASSIFIER,mode:'off'})).outcome,'off');
  assert.equal(fs.existsSync(path.join(root,'classifier.json')),false);assert.equal(off.cache.size,0);
  assert.deepEqual(loadClassifierConfig(root),DEFAULT_CLASSIFIER);
  for(const extra of ['model','kind','scope','commands','authority','tier'])assert.throws(()=>parseRecommendation(JSON.stringify({need:'bounded_retrieval',difficulty:1,reason:'x',[extra]:'evil'})));

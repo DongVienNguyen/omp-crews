@@ -72,8 +72,8 @@ def validate_model(cell,state=None):
 
 def policy():
  from crews.classification import policy_version
- effective=model_policy();small=effective['combos']['Small']
- return {'model_policy':effective,'classifier_model':effective['provider']+'/'+small['model']+':'+combo_effort(small['effort'],1),'policy_version':policy_version(),'policy_binding':policy_binding()}
+ effective=model_policy();large=effective['combos']['Large']
+ return {'model_policy':effective,'classifier_model':effective['provider']+'/'+large['model']+':'+combo_effort(large['effort'],3),'policy_version':policy_version(),'policy_binding':policy_binding()}
 
 def remap_seat(role,requested_seat,requested_effort,state=None):
  combo,model,effort=effective_combo(role,state);configured=model_policy(state)
@@ -231,6 +231,15 @@ def record(run,role,result,project,session,state=None):
   temporary=target.with_name(target.name+'.'+uuid.uuid4().hex+'.tmp')
   temporary.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
   os.replace(temporary,target)
+ observation_id=cell.get('classification',{}).get('learning',{}).get('observation_id')
+ if observation_id:
+  from crews.learning import dispatch as learning_dispatch
+  native=result.get('native') or {}
+  outcome='completed' if status=='completed' else 'provider_error' if result.get('failure_kind')=='provider_error' else 'cancelled' if result.get('failure_kind')=='cancelled' else 'failed'
+  usage=native.get('usage') or {}
+  metrics={'task_input_tokens':usage.get('input',usage.get('inputTokens')),'task_output_tokens':usage.get('output',usage.get('outputTokens'))}
+  try:learning_dispatch({'operation':'outcome','observation_id':observation_id,'outcome':outcome,'metrics':metrics},project)
+  except (ValueError,sqlite3.Error):pass
  return {'status':status,'role_id':role}
 
 def results(run,project,session,state=None):

@@ -55,6 +55,55 @@ test('combo commands validate and persist strict policy', () => {
   } finally {fs.rmSync(temp,{recursive:true,force:true});}
 });
 
+test('learning commands require project and explicit admin confirmation before runtime access', () => {
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'crews-learning-gates-'));
+  const state=path.join(temp,'state');
+  const env={...process.env,CREWS_OMP_HOME:state,CREWS_OMP_USER_HOME:temp,OMP_PROFILE:'',PI_PROFILE:''};
+  const call=(...args)=>{const result=execute(process.execPath,[path.join(source,'bin/crews-omp.mjs'),'learning',...args,'--json'],env);return {...result,data:JSON.parse(result.stdout)};};
+  try {
+    for(const operation of ['status','observations','rules','label','activate','rollback','purge','configure']) {
+      const missing=call(operation); assert.equal(missing.status,1); assert.match(missing.data.error,/require --project/);
+    }
+    for(const args of [['label'],['activate'],['rollback'],['purge'],['configure','--mode','on']]) {
+      const refused=call(...args,'--project',temp); assert.equal(refused.status,1); assert.match(refused.data.error,/requires explicit --yes/);
+    }
+    const missingRuntime=call('status','--project',temp); assert.equal(missingRuntime.status,1); assert.match(missingRuntime.data.error,/Provision isolated runtime/);
+    assert.ok(!fs.existsSync(state),'confirmation and scope failures must not provision runtime or learning data');
+  } finally {fs.rmSync(temp,{recursive:true,force:true});}
+});
+
+test('learning CLI keeps labels explicit, activation gated and project data private', () => {
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'crews-learning-')); const state=path.join(temp,'state');
+  const env={...process.env,CREWS_OMP_HOME:state,CREWS_OMP_USER_HOME:temp,OMP_PROFILE:'',PI_PROFILE:''};
+  const call=(...args)=>{const result=execute(process.execPath,[path.join(source,'bin/crews-omp.mjs'),'learning',...args,'--project',temp,'--python',python,'--json'],env);return {...result,data:JSON.parse(result.stdout)};};
+  const success=result=>assert.equal(result.status,0,result.stdout+result.stderr);
+  const observe=()=>{
+    const script=`import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom crews.learning import dispatch\nprint(json.dumps(dispatch({'operation':'observe','project':sys.argv[2],'role':{'kind':'produce','mission':'PRIVATE_TASK_TEXT','answers':{'divisible':0},'facts':{'unknown_cause':False,'consequential_judgment':False,'behavior_undecided':False}},'context_fingerprint':'context','policy_version':'policy','proposal':{'need':'repeatable_task','difficulty':0}})))`;
+    const result=execute(python,['-c',script,source,temp],env); success(result); return JSON.parse(result.stdout).observation_id;
+  };
+  try {
+    const initial=call('status'); success(initial); assert.equal(initial.data.mode,'shadow'); assert.equal(initial.data.observations,0); assert.equal(initial.data.labels,0); assert.equal(initial.data.audit_every,10);
+    assert.deepEqual(call('observations').data.observations,[]); assert.deepEqual(call('rules').data.rules,[]);
+    const label=(id,split,unit)=>call('label','--id',id,'--need','repeatable_task','--difficulty','0','--evidence','PRIVATE_EVIDENCE','--split',split,'--unit-id',unit,'--yes');
+    const first=observe();
+    const invalid=label(first,'invalid','unit-0'); assert.equal(invalid.status,1); assert.ok(!invalid.stdout.includes('PRIVATE_EVIDENCE')); assert.equal(call('status').data.labels,0);
+    const accepted=label(first,'train','unit-0'); success(accepted); assert.equal(accepted.data.rule_id,null);
+    success(label(observe(),'train','unit-1'));
+    const candidate=label(observe(),'train','unit-2'); success(candidate); const rule=candidate.data.rule_id; assert.ok(rule); assert.equal(candidate.data.state,'candidate');
+    assert.equal(call('activate','--id',rule,'--yes').status,1,'insufficient independently labelled evidence must reject activation');
+    for(let i=3;i<5;i++) success(label(observe(),'holdout',`unit-${i}`));
+    const ready=call('rules'); success(ready); assert.equal(ready.data.rules[0].state,'shadow_ready');
+    assert.equal(call('activate','--id',rule).status,1); assert.equal(call('rules').data.rules[0].state,'shadow_ready','readiness must not silently activate');
+    success(call('configure','--mode','on','--yes')); assert.equal(call('rules').data.rules[0].state,'shadow_ready','mode on must not silently activate');
+    const otherProject=execute(process.execPath,[path.join(source,'bin/crews-omp.mjs'),'learning','status','--project',path.join(temp,'other'),'--python',python,'--json'],env); success(otherProject); assert.equal(JSON.parse(otherProject.stdout).mode,'shadow'); assert.equal(JSON.parse(otherProject.stdout).observations,0);
+    success(call('activate','--id',rule,'--yes')); assert.equal(call('rules').data.rules[0].state,'active');
+    for(const op of ['status','observations','rules']) {const result=call(op); success(result); assert.ok(!result.stdout.includes('PRIVATE_TASK_TEXT')); assert.ok(!result.stdout.includes('PRIVATE_EVIDENCE'));}
+    success(call('rollback','--id',rule,'--yes')); assert.equal(call('rules').data.rules[0].state,'rolled_back');
+    success(call('configure','--mode','off')); assert.equal(call('status').data.mode,'off');
+    success(call('purge','--yes')); assert.equal(call('status').data.observations,0); assert.deepEqual(call('rules').data.rules,[]);
+  } finally {fs.rmSync(temp,{recursive:true,force:true});}
+});
+
 test('path matching follows platform case rules', () => {
   assert.equal(samePath('/Crews/Package','/crews/package'),process.platform==='win32');
   assert.ok(samePath(source,path.join(source,'.')));
@@ -119,7 +168,7 @@ test('real venv setup, repeat, relocate, doctor, migration rollback, uninstall a
   const plugin=(...args)=>execute(omp,['plugin',...args,'--json'],{...env,PI_CONFIG_DIR:'.omp'});
   const success=result=>assert.equal(result.status,0,result.stdout+'\n'+result.stderr);
   const cli=(command,...args)=>{
-    const result=execute(process.execPath,[path.join(pkg,'bin','crews-omp.mjs'),command,'--json','--python',python,...args],env);
+    const result=execute(process.execPath,[path.join(pkg,'bin','crews-omp.mjs'),command,...args,'--json','--python',python],env);
     let data; try {data=JSON.parse(result.stdout);} catch {assert.fail(result.stdout+result.stderr);}
     return {...result,data};
   };
@@ -147,6 +196,10 @@ test('real venv setup, repeat, relocate, doctor, migration rollback, uninstall a
     assert.ok(runtime.python.startsWith(path.join(state,'venvs')));
     const isolated=execute(runtime.python,['-c','import sys,importlib.metadata as m;assert sys.prefix!=sys.base_prefix;assert m.version("mcp")=="1.27.0";assert m.version("PyYAML")=="6.0.3";assert any(d.metadata["Name"].lower()=="pywin32" for d in m.distributions())==(sys.platform=="win32")'],env);
     assert.equal(isolated.status,0,isolated.stderr);
+    assert.ok(!fs.existsSync(path.join(state,'learning.sqlite')),'setup must not initialize learning before explicit use');
+    const learningFile=path.join(state,'learning.sqlite');
+    const learningStatus=cli('learning','status','--project',temp); success(learningStatus); assert.equal(learningStatus.data.mode,'shadow');
+    const learningBefore=fs.readFileSync(learningFile);
     const backupCount=fs.readdirSync(path.join(state,'backups')).length;
     assert.equal(cli('setup','--offline').data.status,'unchanged');
     assert.equal(fs.readdirSync(path.join(state,'backups')).length,backupCount);
@@ -202,6 +255,7 @@ test('real venv setup, repeat, relocate, doctor, migration rollback, uninstall a
     pkg=relocated;
     assert.equal(cli('doctor').status,1);
     success(cli('setup','--offline','--register-plugin'));
+    assert.deepEqual(fs.readFileSync(learningFile),learningBefore,'relocation retains learning DB');
     success(cli('doctor'));
     assert.equal(JSON.parse(fs.readFileSync(path.join(state,'runtime.json'))).packageRoot,pkg);
     const oldRoot=path.join(home,'.local/share/crews-omp');
@@ -260,6 +314,7 @@ test('real venv setup, repeat, relocate, doctor, migration rollback, uninstall a
     const defaultPolicy={provider:'9router',models:{haiku:'code-seek',sonnet:'code-sol',opus:'code-astra'}};
     fs.writeFileSync(policyFile,JSON.stringify(defaultPolicy));
     success(cli('setup'));
+    assert.deepEqual(fs.readFileSync(learningFile),learningBefore,'upgrade retains learning DB');
     const newPython=JSON.parse(fs.readFileSync(path.join(state,'runtime.json'))).python;
     assert.notEqual(newPython,oldPython);
     assert.ok(newPython.includes(`${nextVersion}-py`));
@@ -280,8 +335,10 @@ test('real venv setup, repeat, relocate, doctor, migration rollback, uninstall a
     assert.deepEqual(fs.readFileSync(mcpPath),beforeFailedUninstall);
     success(cli('doctor'));
     success(cli('uninstall'));
+    assert.deepEqual(fs.readFileSync(learningFile),learningBefore,'uninstall retains learning DB');
     assert.ok(fs.existsSync(path.join(state,'run-counter.json')));
     success(cli('setup','--offline','--register-plugin'));
+    assert.deepEqual(fs.readFileSync(learningFile),learningBefore,'reinstall retains learning DB');
     success(cli('doctor'));
   } finally {
     // Every native operation uses isolated plugin root; never touch user's plugins.

@@ -5,6 +5,7 @@ node_modules/
 runtime.json
 classifier.json
 *.sqlite*
+learning.key
 *.tgz
 state/
 backups/

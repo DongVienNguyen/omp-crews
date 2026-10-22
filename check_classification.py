@@ -128,7 +128,7 @@ def check_persistence_and_bridge(corpus, declared, project, state):
     write_policy(state, policy)
     assert policy_version() != original_version
     assert server.crew_catalog()['model_policy'] == policy
-    assert adapter.preview(declared, project)['classifier_model'] == 'local-provider/small-v2:medium'
+    assert adapter.preview(declared, project)['classifier_model'] == 'local-provider/large-v2:high'
     result = bridge({'op': 'policy'}, state)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == adapter.policy()

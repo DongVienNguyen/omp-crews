@@ -37,7 +37,7 @@ def policy_version():
     # Hash policy-owning code too: remaps and difficulty boundaries are not all catalog data.
     from pathlib import Path
     root = Path(__file__).resolve().parent
-    sources = ['classification.py', 'omp_adapter.py', 'planner.py', 'budget.py']
+    sources = ['classification.py', 'omp_adapter.py', 'planner.py', 'budget.py', 'learning.py']
     from crews.omp_adapter import model_policy
     payload = {'catalog': catalog.load(), 'rubric': RUBRIC, 'model_policy':model_policy(),
                'sources': {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sources}}

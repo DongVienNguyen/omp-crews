@@ -10,7 +10,7 @@ try {
  let calls=0;
  const c=new Classifier(async()=>{calls++;return {text:'{"need":"bounded_retrieval","difficulty":1,"reason":"known lookup"}',stopReason:'stop',usage:{totalTokens:12}};});
  const cfg={...DEFAULT_CLASSIFIER,mode:'recommend'};
- assert.equal((await c.recommend(role,root,'s','v1',DEFAULT_CLASSIFIER)).outcome,'off');assert.equal(calls,0);
+ assert.equal((await c.recommend(role,root,'s','v1',{...DEFAULT_CLASSIFIER,mode:'off'})).outcome,'off');assert.equal(calls,0);
  assert.equal((await c.recommend(role,root,'s','v1',cfg)).recommendation.need,'bounded_retrieval');
  assert.equal((await c.recommend(role,root,'s','v1',cfg)).cacheHit,true);assert.equal(calls,1);
  fs.writeFileSync(path.join(root,'x.txt'),'b');await c.recommend(role,root,'s','v1',cfg);assert.equal(calls,2);

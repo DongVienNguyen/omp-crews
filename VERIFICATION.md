@@ -1,5 +1,18 @@
-# Verification — crews-omp 0.3.0
+# Verification — crews-omp 0.4.0
 
+## Verified adaptive classification acceptance
+
+- Current classifier uses the Large Combo for unresolved classification:true roles, recommend default, capped512 output tokens/30000ms. Deterministic/explicit classifications bypass teacher. Large configured effort honored; main chat unchanged.
+- check_learning.py covers 3train+2disjoint holdout, duplicate/cross-policy units, conflict/suspension, safe facts, policy/context/project invalidation, privacy bytes/SQLite integrity, cap/purge/mode reset, independent feedback only. Exact literal input fingerprints prevent command/string whitespace conflation; no raw task/evidence/source persisted in learning DB.
+- check_adaptive_classifier.mjs exercises actual Python bridge: five independent labeled observations, explicit activation,18local classifications, tenth-hit fresh teacher audit, disagreement suspension/rollback, learned-output label refusal, storage-failure fallback, shadow noninterference. Scripted teacher proves mechanics, not real-world savings.
+- Actual OMP local HTTP teacher lifecycle passes: Large/high teacher (no agent spawn) fills missing answers, Small/medium native child reads fixture, strict JSON/wire/native complete; observation1, labels0. Existing native/local routing checks remain passing.
+- Actual configured-provider smoke run cc97c7e565264898b6c349fb28663fc6: Large teacher request resolved classification in8506ms with input3111/output61 tokens, then Small/low child COMPLETE with exit0 and matching receipt. Learner report1observation/0labels/0calls avoided. Backend identity behind aliases not inferred.
+- Interactive OMP18.12.5 /crew learning actually displays Status, Label observation, Activate rule, Rollback rule and Mode; canceled without changes. Editor confirmation/cancel/payload tests pass. Model-facing crew_learning tool is read-only; CLI mutations need explicit --yes and project.
+- Packaging suite8passed0failed, final observed223seconds: new learner lifecycle, project scope/confirmation/privacy and retained learning DB across relocation/upgrade/uninstall-reinstall, plus existing Combo/lifecycle/rollback tests. Python runtime dependencies unchanged; no extra service, model weights or SDK patch added.
+- Learned rules default project-shadow, activation manual after thresholds and separate mode on. Every10active hits forces fresh audit; invalid/error/disagree suspends, never reuse old answer to hide teacher failure. Learning DB failures are advisory: valid classification can proceed with unavailable metadata, no unsafe rule fallback. Cached teacher responses do not double count usage.
+- No auto-correct label from task COMPLETE or provider error, no fine-tuning, no fuzzy generalization or measured real-task cost/quality guarantee. Global setup upgrades runtime0.4.0; old state/credentials preserved, new processes required.
+
+## Historical Combo 0.3.0 evidence
 ## Combo release acceptance
 
 - Current policy is Combo Small/Medium/Large, each with user model ID and Low/Medium/High/Auto. Missing effort defaults Auto; native wire effort is lowercase. Former fixed-Seek-high/remap observations below are historical 0.2.0 evidence, not current routing.

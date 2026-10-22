@@ -67,7 +67,7 @@ crews-omp combo reset --json
 
 Use `node <package-root>/bin/crews-omp.mjs` instead of `crews-omp` when executable is not on PATH. Effort options are case-insensitive. Setting a model without its effort resets that Combo to Auto; untouched Combos retain their settings. Missing policy effort defaults to Auto. Legacy `{provider,models:{haiku,sonnet,opus}}` files remain readable; `combo set` explicitly converts/persists canonical `combos` configuration. `combo reset` writes defaults. Obsolete `policy` command and old model-slot flags are not supported.
 
-Policy changes invalidate old plan bindings, including effort-only changes. Create fresh plans after changes. Classifier follows configured Small model and effort (Auto uses classification difficulty 1), not a fixed high effort. Provider authentication remains in OMP.
+Policy changes invalidate old plan bindings, including effort-only changes. Create fresh plans after changes. The semantic teacher follows configured Large model and effort (Auto uses classifier difficulty3, hence high). Provider authentication remains in OMP.
 
 ## Classification and preview
 
@@ -80,11 +80,40 @@ Policy changes invalidate old plan bindings, including effort-only changes. Crea
 
 Canonical `task` intake contains `intake:{spec,answers,session}`. `spec` uses task plus roles with name/kind/mission/deliverable, scope/commands/acceptance and flat role answers. Only `classification:true` may omit need/difficulty; `divisible` and `specific` remain required. [MCP minimal example](omp_server.py) supplies explicit canonical plan shape. Intake returns references, not execution; dispatch each returned `crew:{run,role,session}` through task. It never invents scope, commands, acceptance or model selectors. Invalid/unresolved plans block ordinary delegation rather than falling back silently.
 
-## Optional semantic recommendation
+## Large teacher and verified local learning
 
-`<state>/classifier.json` absent means off. Modes are `off`, `shadow`, `recommend`; opt-in may incur provider requests. Optional model must match effective classifier identity (default `9router/code-seek:medium` under Auto). See [classifier configuration](classifier.mjs) for timeout/output bounds.
+Classification order is: explicit valid answers, deterministic facts, active verified local rule, then Large teacher for unresolved answers. The teacher proposes need/difficulty only; execution may still use Small. It does not split arbitrary requests into authorized roles: the orchestrator must supply canonical role scope, commands and acceptance.
 
-Declared/deterministic answers make no model call. Semantic requests use OMP authentication, bounded role facts, configured Small effort, strict JSON and capped output; no repository dump or credential copy. Errors/timeouts preserve explicit valid answers, otherwise require classification. Shadow never changes routing; recommend fills unresolved need/difficulty only. Cache identity includes project/session, policy and context; stale results are not reused.
+`<state>/classifier.json` absent uses `recommend`, Large Combo, timeout30000ms and maxTokens512. This is enabled for unresolved `classification:true` roles; it may incur provider requests. `off` disables teacher calls; `shadow` compares without changing effective answers. Explicit/deterministic answers avoid calls except requested shadow comparison. Existing classifier.json is not overwritten: an old Small model override must be removed or updated to current Large identity before enabling. Large Auto uses high; explicit Combo effort is respected. Strict JSON, safety checks and caller answers remain authoritative.
+
+The learner is bundled and requires no extra service/dependency beyond plugin setup. Its default is **shadow per project**: observations and validated candidates can accumulate, but rules cannot replace the teacher until you explicitly enable mode on and activate an eligible rule. Same task family/context/policy must match exactly; this is verified experience reuse, not neural fine-tuning or semantic similarity routing.
+
+### Human feedback and activation
+
+`/crew learning` provides confirmed interactive labeling, mode selection, activation and rollback. The `crew_learning` model tool is read-only. CLI equivalents:
+
+```text
+crews-omp learning status --project <project> --json
+crews-omp learning observations --project <project> --json
+crews-omp learning label --project <project> --id <observation-id> --need bounded_retrieval --difficulty 1 --evidence "Independent check of required capability" --split train --unit-id <unique-task-id> --yes --json
+crews-omp learning rules --project <project> --json
+crews-omp learning activate --project <project> --id <rule-id> --yes --json
+crews-omp learning configure --project <project> --mode on --yes --json
+crews-omp learning report --project <project> --json
+crews-omp learning rollback --project <project> --id <rule-id> --yes --json
+```
+
+At least **3 independent train units plus 2 disjoint holdout units** must agree before activation. `--split holdout` uses distinct unit IDs; do not label five copies of one check as independent evidence. Only human-reviewed classification labels count. Teacher guesses, `COMPLETE`, provider errors, cancellation and timeout never create correctness labels. Label capability/difficulty, not merely whether a model returned an answer. Cheap labels require explicit negative risk facts; unknown cause/security/consequential judgment cannot be learned into a cheap route.
+
+Candidates are shadowed, not automatically activated. Every tenth active match bypasses classifier cache and asks Large to audit; disagreement, invalid output or failure suspends the rule. Existing explicit answers always win; scope/model/effort admission guards cannot be learned away. Rolled-back/suspended rules do not silently reactivate. Policy/model/prompt/context changes invalidate reuse.
+
+### Privacy, metrics and retention
+
+Learning persists keyed HMAC project/task/context fingerprints, boolean safety facts, numeric labels and bounded metrics in `learning.sqlite`, with local `learning.key`. It does not store raw task, source content, file paths, commands, evidence text or credentials in the learning DB. Ordinary Crews records/transcripts retain their existing brief/evidence behavior; this is not a claim that all plugin storage is secret-free. Teacher request still sends bounded role text through the configured provider.
+
+Capacity is 10000 observations / bounded SQLite pages; full capacity drops new observations visibly rather than training or silently deleting evidence. Reports separate verified-label agreement, errors, observed teacher calls, local calls avoided, tokens and latency with unknown coverage. These counters are not a real-task quality/cost benchmark. `crews-omp learning purge --project <project> --yes --json` explicitly removes that project's learned data. Uninstall/upgrade/reinstall preserve learning state by default; never package state DB/key. Back up sensitive local state separately.
+
+The conservative thresholds and periodic audit are guardrails, not a statistical guarantee. To broaden generalization, collect a representative independent labeled corpus first; no rules are synthesized from one teacher answer.
 
 ## Safety and verification
 

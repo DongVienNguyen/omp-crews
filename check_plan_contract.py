@@ -147,7 +147,7 @@ async def main():
                     assert data['kind_columns'] == {k: v['column'] for k, v in cat['kinds'].items()}
                     assert set(data['model_policy']['combos']) == {'Small', 'Medium', 'Large'}
                     assert data['combo_effort_options'] == ['Low', 'Medium', 'High', 'Auto']
-                    assert data['classifier_model'] == '9router/code-seek:medium'
+                    assert data['classifier_model'] == '9router/code-astra:high'
                     assert 'seek_first_policy' not in data
                     assert data['effort_policy']
                     example = data['minimal_example']
