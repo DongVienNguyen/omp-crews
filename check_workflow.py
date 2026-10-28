@@ -48,6 +48,7 @@ def run_checks():
         value = spec()
         send = lambda req: runner.dispatch(req, str(project), state)
         prepared = send(request(value))
+        assert prepared['profile']=='sdlc_cost_aware'
         assert prepared['next'][0]['role'] == 'inspect-policy-source'
         assert [n['state'] for n in prepared['nodes']] == ['planned', 'pending', 'pending']
         assert send(request(value))['next'] == prepared['next']
@@ -146,6 +147,11 @@ def run_checks():
         with a.database(state) as db:
             db.execute("UPDATE calls SET status='admitted' WHERE run=?", (legacy_state['run'],))
         assert 'admitted' in send(dict(operation='status', slot='legacy'))['blocked']
+        with tempfile.TemporaryDirectory() as fresh:
+            (Path(fresh)/'fixture.txt').write_text('original',encoding='utf-8')
+            baseline=runner.dispatch({**request(spec()),'profile':'baseline'},fresh,Path(fresh)/'state')
+            retry=runner.dispatch(request(spec()),fresh,Path(fresh)/'state')
+            assert baseline['profile']==retry['profile']=='baseline' and baseline['next']==retry['next']
     print('PASS: workflow dependencies/same-kind ordering, immutable slots, crash/restart no replay, authority/overlap/cycle/unknown rejection, original final checks, host metadata, total retry budget/caps, source freeze and legacy runner compatibility')
 
 

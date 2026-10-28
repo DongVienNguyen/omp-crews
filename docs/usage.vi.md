@@ -315,11 +315,15 @@ Migration/rollback là luồng khác; xem [Existing installs](../README.md#exist
 - Khi OMP đóng, không có dịch vụ nền tự chạy task/gia hạn. Mở lại sẽ tiếp tục theo host state.
 - Không bảo đảm model-equivalence hoặc độ đúng production chỉ từ smoke. [Verification](../VERIFICATION.md) phân biệt kiểm chứng fixture, native thực và giới hạn chưa exercise.
 
-## 14. Workflow SDLC opt-in
+## 14. Workflow SDLC đã bật
 
-Mặc định `baseline`; chỉ chọn `profile:"sdlc_cost_aware"` khi tạo workflow mới. Không đổi main model, Combo hay effort. `stage` chỉ mô tả giai đoạn; `need` mới quyết định route.
+User đã cho phép bật trước khi benchmark đạt gate. Workflow mới mặc định `sdlc_cost_aware`; `profile:"baseline"` opt-out cho workflow mới. Slot cũ giữ profile đã pin khi bỏ qua trường này. Không đổi main model, Combo hay effort; đây không phải tuyên bố benchmark PASS. `stage` mô tả giai đoạn, `need` quyết định route.
 
 CLI: `crews-omp workflow prepare|status|next|recheck|recover|attempts|evaluation --project PATH --request FILE [--yes]`. MCP dùng `crew_runner`. Manifest gồm `task`, `authority:{read,write,commands}`, `invariants`, `max_calls`, `nodes:[{id,stage,depends_on,roles,answers}]`; request có `slot`, `session`. Prepare/next/recheck/recover cần xác nhận. Dispatch từng reference `next` qua `task {crew:...}`; tối đa hai child độc lập, không tự chạy benchmark.
+
+Trong OMP dùng `crew_workflow {request:{operation:"prepare"|"status"|"next"|"recheck"|"recover",slot,session,...}}`; thao tác thay đổi cần `confirmed:true`. Hướng dẫn startup dùng workflow cho Crews coding nhiều stage, chỉ thêm scout khi thiếu context; một bước dùng intake trực tiếp. Task native thường không tự bị remap. Khởi động phiên OMP mới để nạp tool/hướng dẫn mới.
+
+Setup bật `task.structured:true` trong OMP; doctor báo not_ready nếu tắt. Khi false, native task bỏ schema caller và trả text thường — nguyên nhân JSON lỗi trước đây. Bật setting không đổi model/effort; chỉ cho host kiểm schema và tool yield. Checker runtime vẫn do host thực thi độc lập. Setup giữ các task setting khác/modelRoles; mở phiên mới sau cập nhật.
 
 Packet scout tối đa8KiB/32source refs, có hash/line range và unresolved. `needs_more_context` yêu cầu đọc lại nguồn trong scope đã cấp; không biến summary thành authority. Checker không nhận kết luận producer. Workflow kiểm tra read/grep/glob grants và symlink; shell đã cấp vẫn là trusted code, không phải OS sandbox.
 

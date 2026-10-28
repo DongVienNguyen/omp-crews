@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createPlanRecovery } from './routing-policy.mjs';
+import { createPlanRecovery, isCrewPlanCall } from './routing-policy.mjs';
 const guard = createPlanRecovery();
 assert.equal(guard.blockReason(), null);
 guard.begin('a');
@@ -28,4 +28,7 @@ guard.result('g', false);
 assert.equal(guard.blockReason(), null);
 guard.reset();
 assert.equal(guard.blockReason(), null);
+assert.equal(isCrewPlanCall('crew_workflow',{request:{operation:'prepare'}}),true);
+assert.equal(isCrewPlanCall('crew_workflow',{request:{operation:'status'}}),false);
+assert.equal(isCrewPlanCall('task',{tasks:[]}),false);
 console.log('PASS: pending/failed plan blocks native fallback; corrected plan and new user turn recover');

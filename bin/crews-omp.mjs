@@ -29,7 +29,7 @@ try {
     console.log('\nStorage: storage status (read-only) | cleanup [--dry-run | --yes] | compact --yes\nStorage commands use selected --state-dir / --profile; cleanup previews by default.');
     console.log('\nAdaptive: recipes status|lookup|register|evidence|activate|audit|rollback|configure|probe --project PATH [--request JSON_FILE] [--yes]\nRecovery: recover --project PATH --request JSON_FILE --yes (dead admitted dispatch owner only)');
     console.log('\nAutomation: automation enable|disable|status|export|import --project PATH [--request JSON_FILE] [--yes]\nSetup enables keyless local policy governance. Export JSON to external AI; edit proposal only; import queues Large review, never direct apply.');
-    console.log('\nWorkflow: workflow prepare|status|next|recheck|recover|attempts|evaluation --project PATH --request JSON_FILE [--yes]\nStage dependency plans are opt-in; execution uses admitted task crew references, never replay.');
+    console.log('\nWorkflow: workflow prepare|status|next|recheck|recover|attempts|evaluation --project PATH --request JSON_FILE [--yes]\nDefault sdlc_cost_aware for fresh workflows; explicit baseline opts out. Native crew_workflow returns admitted task crew references; never replay.');
     return;
   }
   const action = ['combo','learning','storage','recipes','automation','workflow'].includes(command) && args[0] && !args[0].startsWith('--') ? args.shift() : ['learning','storage','recipes','automation','workflow'].includes(command) ? 'status' : 'show';
@@ -131,6 +131,14 @@ doc=doc or {}
 if not isinstance(doc,dict): raise ValueError('Configuration must be a mapping')
 op=req['op']
 if op=='extensions': print(json.dumps(doc.get('extensions',[])))
+elif op=='structured': print(json.dumps(doc.get('task',{}).get('structured') is True))
+elif op=='enable_structured':
+ task=doc.setdefault('task',{})
+ if not isinstance(task,dict): raise ValueError('task configuration must be a mapping')
+ task['structured']=True
+ if req['values']:
+  doc['extensions']=[x for x in doc.get('extensions',[]) if x not in req['values']]
+ print(yaml.safe_dump(doc,sort_keys=False),end='')
 elif op=='remove':
  old=doc.get('extensions',[])
  doc['extensions']=[x for x in old if x not in req['values']]
@@ -459,6 +467,7 @@ function main() {
     let aliases = {};
     if (python && dependencies(python)) {
       if(!mcpProbe(python,loc)) problems.push('MCP stdio initialize/schema/catalog handshake failed');
+      if(JSON.parse(yaml(python,loc.config,'structured'))!==true) problems.push('Native strict task output disabled; run setup to enable task.structured');
       aliases = JSON.parse(yaml(python,path.join(loc.agentDir,'models.yml'),'models',{state:loc.state,packageRoot:root}));
       for(const [name,result] of Object.entries(aliases)) if(!result.present || result.missingEfforts.length) problems.push(`Unsupported alias ${name}: ${!result.present?'missing':`missing efforts ${result.missingEfforts.join(',')}`}`);
       const plan = legacyPlan(loc,python);
@@ -492,10 +501,11 @@ function main() {
   const runtime = {schemaVersion:1,owner,python,state:loc.state,agentDir:loc.agentDir,packageRoot:root};
   const automatic=run(python,['-B','-c','import sys,json;sys.path.insert(0,sys.argv[1]);from crews.automation import install;print(json.dumps(install()))',root],{...process.env,CREWS_OMP_HOME:loc.state,PYTHONUTF8:'1'});
   const automation=JSON.parse(automatic.stdout);
-  const unchanged = isDeepStrictEqual(saved,runtime) && fs.existsSync(loc.mcp) && isDeepStrictEqual(readJSON(loc.mcp),mcp);
+  const structured=JSON.parse(yaml(python,loc.config,'structured'))===true;
+  const unchanged = structured && isDeepStrictEqual(saved,runtime) && fs.existsSync(loc.mcp) && isDeepStrictEqual(readJSON(loc.mcp),mcp);
   if(command === 'setup' && unchanged) return {ok:true,status:'unchanged',command,packageRoot:root,state:loc.state,agentDir:loc.agentDir,python,pluginLinked:linked,automation};
-  const targets = [loc.runtime,loc.mcp,...(command==='migrate'?[loc.config,...plan.files.map(f=>f.path)]:[])];
-  const renderedConfig=command==='migrate' && plan.extensions.length ? yaml(python,loc.config,'remove',plan.extensions) : null;
+  const renderedConfig=!structured || command==='migrate' && plan.extensions.length ? yaml(python,loc.config,'enable_structured',command==='migrate'?plan.extensions:[]) : null;
+  const targets = [loc.runtime,loc.mcp,...(renderedConfig!==null?[loc.config]:[]),...(command==='migrate'?plan.files.map(f=>f.path):[])];
   const expected=Object.fromEntries(targets.map(file=>[file,fs.existsSync(file)?hash(fs.readFileSync(file)):null]));
   expected[loc.runtime]=hash(`${JSON.stringify(runtime,null,2)}\n`);
   expected[loc.mcp]=hash(`${JSON.stringify(mcp,null,2)}\n`);
@@ -504,10 +514,10 @@ function main() {
   const backup = transact(targets,()=>{
     json(loc.runtime,runtime);
     json(loc.mcp,mcp);
+    if(renderedConfig!==null) write(loc.config,renderedConfig);
     if(command === 'migrate') {
       // New native plugin and owner-marked MCP registration exist before removing old discovery.
       if(!registered(loc)) throw new Error('Native plugin disappeared before migration commit');
-      if(renderedConfig!==null) write(loc.config,renderedConfig);
       for(const file of plan.files) {
         if(hash(fs.readFileSync(file.path))!==file.hash) throw new Error(`File changed during migration: ${file.path}`);
         fs.unlinkSync(file.path);

@@ -320,7 +320,7 @@ def build_plan(spec,answers,project,session,state=None):
    if role.get('kind')=='check':
     call['prompt']+='\nIndependently verify original acceptance and validity of any producer-written tests before trusting their results. Producer conclusions are not evidence.\n'
    if role.get('kind')=='check':
-    call['prompt']+='\nReturn criterion_results in original criteria order, each {criterion: exact text, status: pass or fail}. Static inspection is not runtime evidence. Host independently executes checker_profile when present.\n'
+    call['prompt']+='\nFINAL OUTPUT: one JSON object only, with status, verification, and criterion_results INSIDE the SAME object. Example shape: {"status":"COMPLETE","verification":["observed evidence"],"criterion_results":[{"criterion":"exact original criterion","status":"pass"}]}. Do not close the object before criterion_results; no trailing prose or second JSON object. Preserve every original criterion in order. Static inspection is not runtime evidence; host independently executes checker_profile when present.\n'
  positions={call['role_id']:index for index,wave in enumerate(waves) for call in wave['calls']}
  for role in spec['roles']:
   if role.get('routine_check') and (role['name'] not in positions or role['routine_check'] not in positions or positions[role['routine_check']]<=positions[role['name']]):

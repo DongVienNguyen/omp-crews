@@ -1,6 +1,6 @@
 # Phase4 — Đo toàn workflow và rollout
 
-Status complete with broad rollout NO_GO.0.11.0 code applied main/canary; baseline default, SDLC opt-in. User removed money criteria. Canary provider startup CANARY_READY; V4 reconstructed provider corpus stopped at12terminal arms, baseline6accepted/candidate5accepted and one strict checker schema failure. Missing pairs stay unknown. Oracle audit corrections validated separately, never rewritten into frozen results. See [verification](../../VERIFICATION.md).
+Status enabled by explicit operator override before benchmark qualification.0.11.1 applied; default sdlc_cost_aware and native crew_workflow. User removed money criteria. Full32-unit/64-arm reconstructed evaluation continues without replay; independent behavior/latency verdict stays separate from permission to enable. Host structured-output prerequisite repaired; old failures not reclassified. See [verification](../../VERIFICATION.md).
 
 ## Frozen task corpus
 
@@ -36,13 +36,13 @@ Lưu theo workflow+attempt ledger phase3:
 
 ## Rollout
 
-1. Opt-in profile `sdlc_cost_aware` trong scope project, không silently bật toàn bộ existing projects. Default baseline trong giai đoạn evaluation; ordinary chat ngoài canonical intake không bị đổi.
+1. Operator now explicitly enables sdlc_cost_aware for fresh workflows; baseline remains explicit opt-out. Existing manifests retain pinned profile. Startup selects native crew_workflow for multi-stage Crews work; one-step direct intake and ordinary native model path unchanged.
 2. Reconstructed provider corpus explicitly authorized. [runner.py](benchmark/runner.py) emits arm progress, retains terminal failures and supports STOP at arm boundaries; no replay or automatic retry. No price cap requested by user.
 3. Canary trên project đã chọn; mỗi completed workflow report route/stage/guard, strikes, accepted behavior, usage coverage và policy epoch. Không self-promote profile từ model summary.
-4. Khi gate đạt và independent Large đánh giá evidence: enable default cho fresh installations/project theo user-approved rollout decision; sticky disable preserved. Existing recipes/control-plane remain separate.
+4. Benchmark verdict remains honest even after operator enablement. No receipt/checker/scope/cap exemption or model self-promotion. Existing recipes/control-plane remain separate.
 5. Rollback chỉ chọn baseline cho **future workflows**; active pinned workflow tiếp tục binding hoặc pause rõ nếu policy invalid. Không rewrite old attempts/outcomes; không xóa ledger để undo.
 6. Docs/skill/CLI help khớp schema; hướng dẫn export profile policy để AI ngoài tối ưu bằng proposal, không dán system prompt vào JSON. Model names remain IDs do user cấu hình, explicit effort giữ nguyên. Commit/push sau implementation chỉ khi user yêu cầu.
 
 ## Deliverable
 
-Quality/latency/context table per family, per-stage routes, native receipts and GO/NO_GO. No guarantee cao nhất, no70%quota, no price/speed guesses. User explicitly requests apply then commit/push after plan completion; broad default enable still requires quality evidence, not monetary evidence.
+Quality/latency/context table per family, per-stage routes, native receipts and GO/NO_GO. No guarantee cao nhất, no70%quota, no price/speed guesses. Operator explicitly overrode promotion gate to enable before qualification; benchmark result remains separate and honest. Apply and commit/push remain authorized.

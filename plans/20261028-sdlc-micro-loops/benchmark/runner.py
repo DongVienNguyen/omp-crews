@@ -158,8 +158,10 @@ def native_run(args, output, project, unit, arm, spec, state, host_extension):
                BENCHMARK_RUNNER=str(Path(__file__).resolve()), BENCHMARK_PROJECT=str(project),
                BENCHMARK_SLOT='benchmark', BENCHMARK_SESSION=session, PYTHONUTF8='1',
                PYTHONDONTWRITEBYTECODE='1')
+    native_config=output/'native-config.yml'
+    if not native_config.exists():native_config.write_text('task:\n  structured: true\n',encoding='utf-8')
     argv = [args.omp, '--cwd', str(project), '--no-extensions', '-e', str(ROOT),
-            '-e', str(host_extension), '--model', args.main_model, '--mode', 'json',
+            '-e', str(host_extension), '--config',str(native_config),'--model', args.main_model, '--mode', 'json',
             '--no-session', '--max-time', str(args.timeout), '-p',
             'Execute ONLY frozen benchmark workflow. Call benchmark_next, then task with each exact returned crew reference {run,role,session}. Never use ordinary task, intake, replacement plan, direct writes, provider calls, repair or escalation. Repeat benchmark_next until complete or blocked. At most two native children concurrently. On blocked/failed stop and preserve evidence. This is reconstructed benchmark, not production.']
     # Persist before launch; killed process remains launched, never auto-replayed.

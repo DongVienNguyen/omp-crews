@@ -1,4 +1,4 @@
-"""Opt-in dependency plans. Reservations survive crashes; execution stays in native admission."""
+"""Dependency plans. Reservations survive crashes; execution stays in native admission."""
 import json
 import os
 import re
@@ -316,13 +316,14 @@ def dispatch(request, project, state=None):
         raise ValueError('workflow operation must be prepare/status/next/recheck/recover')
     if op != 'status' and request.get('confirmed') is not True:
         raise ValueError('workflow prepare/next requires explicit confirmation')
-    profile = request.get('profile', 'baseline')
+    profile = request.get('profile', 'sdlc_cost_aware')
     if profile not in ('baseline', 'sdlc_cost_aware'):
         raise ValueError('workflow profile must be baseline/sdlc_cost_aware')
     with a.database(state) as db:
         _schema(db)
         db.execute('BEGIN IMMEDIATE')
         prior = db.execute('SELECT id,session,identity FROM workflows WHERE project=? AND slot=?', (project, slot)).fetchone()
+        if prior and 'profile' not in request:profile=_manifest(db,prior[0])['profile']
         if prior and prior[1] != session:
             raise ValueError('workflow slot session changed')
         if op == 'prepare' or 'workflow' in request:

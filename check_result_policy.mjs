@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {verifiedCompletion} from './result-policy.mjs';
+const call={provider:'9router',model:'configured-model',reasoning_effort:'medium'};
+const proof={provider:call.provider,model:call.model,effort:call.reasoning_effort};
+const payload={status:'COMPLETE',verification:['Independent criterion observed']};
+const row={exitCode:0,resolvedModelIdentity:'9router/configured-model',resolvedThinkingLevel:'medium',structuredOutput:{status:'valid',data:payload}};
+assert.equal(verifiedCompletion(row,payload,proof,call),true);
+for(const status of ['invalid','unavailable'])assert.equal(verifiedCompletion({...row,structuredOutput:{status,data:payload}},payload,proof,call),false);
+assert.equal(verifiedCompletion({...row,aborted:true},payload,proof,call),false);
+assert.equal(verifiedCompletion(row,payload,{...proof,effort:'high'},call),false);
+assert.equal(verifiedCompletion(row,{...payload,verification:[]},proof,call),false);
+console.log('PASS native invalid/unavailable schema metadata, abort, model-effort drift and missing evidence cannot become COMPLETE');

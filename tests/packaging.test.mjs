@@ -270,14 +270,15 @@ test('real venv setup, repeat, relocate, doctor, migration rollback, uninstall a
   const agent=path.join(home,'custom-agent');
   const state=path.join(home,'state');
   let pkg=path.join(temp,'package');
-  fs.cpSync(source,pkg,{recursive:true,filter:p=>!p.includes('__pycache__')&&!p.includes(`${path.sep}tests`)});
+  fs.cpSync(source,pkg,{recursive:true,filter:p=>!path.relative(source,p).split(path.sep).some(part=>['__pycache__','.git','pip','node_modules','tests'].includes(part))});
   fs.mkdirSync(agent,{recursive:true});
   const env={...process.env,HOME:home,USERPROFILE:home,CREWS_OMP_USER_HOME:home,PI_CONFIG_DIR:path.join(home,'.omp'),PI_CODING_AGENT_DIR:agent,CREWS_OMP_HOME:state,CREWS_OMP_AGENT_DIR:agent};
   const omp=process.env.CREWS_OMP_OMP || 'omp';
   const plugin=(...args)=>execute(omp,['plugin',...args,'--json'],{...env,PI_CONFIG_DIR:'.omp'});
   const success=result=>assert.equal(result.status,0,result.stdout+'\n'+result.stderr);
   const cli=(command,...args)=>{
-    const result=execute(process.execPath,[path.join(pkg,'bin','crews-omp.mjs'),command,...args,'--json','--python',python],env);
+    const offline=process.env.CREWS_OMP_WHEELHOUSE&&['setup','migrate'].includes(command)&&!args.includes('--offline')?['--offline']:[];
+    const result=execute(process.execPath,[path.join(pkg,'bin','crews-omp.mjs'),command,...args,...offline,'--json','--python',python],env);
     let data; try {data=JSON.parse(result.stdout);} catch {assert.fail(result.stdout+result.stderr);}
     return {...result,data};
   };
@@ -319,6 +320,12 @@ test('real venv setup, repeat, relocate, doctor, migration rollback, uninstall a
     assert.equal(JSON.parse(fs.readFileSync(path.join(state,'automation-local.json'))).identity,localPolicy.identity,'repeat setup preserves local installation authority');
     success(plugin('link',pkg,'--scope','user'));
     success(cli('doctor'));
+    const nativeConfig=path.join(agent,'config.yml');
+    const disabledConfig=fs.readFileSync(nativeConfig,'utf8').replace('structured: true','structured: false');
+    fs.writeFileSync(nativeConfig,disabledConfig);
+    const noStructured=cli('doctor');assert.equal(noStructured.status,1);assert.ok(noStructured.data.problems.some(p=>p.includes('strict task output disabled')));
+    success(cli('setup'));success(cli('doctor'));
+    assert.ok(fs.readFileSync(nativeConfig,'utf8').includes('structured: true'));
     const currentMcpPath=path.join(agent,'mcp.json');
     const currentMcp=JSON.parse(fs.readFileSync(currentMcpPath));
     currentMcp.mcpServers['crews-omp']=Object.fromEntries(Object.entries(currentMcp.mcpServers['crews-omp']).reverse());

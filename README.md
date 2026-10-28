@@ -242,11 +242,15 @@ New plan creation triggers at most one cleanup attempt per24h when auto_cleanup 
 
 Before first real cleanup keep a snapshot. Commands target active profile/state, use --state-dir for an isolated preview. Learning retention and purge remain separate and explicit. Current-state integrity and active guards are verified before reclaim; no old run becomes executable because a ticket row was removed.
 
-## Opt-in SDLC workflows (2026-10-28)
+## Enabled SDLC workflows
 
 `crew_runner` accepts `workflow_prepare`, `workflow_status`, `workflow_next`, `workflow_recheck`, and `workflow_recover`. CLI: `crews-omp workflow prepare|status|next|recheck|recover|attempts|evaluation --project PATH --request FILE [--yes]`. Prepare/next/recheck/recover require `--yes`; evaluation freeze/attest still require operator signatures. No new scheduler or automatic provider benchmark runs.
 
-Prepare request contains `slot`, `session`, optional `profile` (`baseline` default or explicit `sdlc_cost_aware`), and `workflow: {task, authority:{read,write,commands}, invariants, max_calls, nodes}`. Each node has `{id,stage,depends_on,roles,answers}` with existing canonical roles/task answers. Stage does not select Combo. Dependencies allow same-kind stages; unordered overlapping readers/writers are refused. Returned `next` contains at most two admitted `task {crew:...}` references; caller dispatches them explicitly.
+Native OMP `crew_workflow` accepts `{request:{operation:"prepare"|"status"|"next"|"recheck"|"recover",slot,session,...}}`; mutating operations require `confirmed:true`. It reuses the same runner and returns exact `task {crew:...}` references. Startup guidance selects this path for multi-stage Crews coding; one-step work retains direct canonical intake. Ordinary native tasks and main model are not silently remapped.
+
+Setup enables OMP `task.structured:true` transactionally; doctor refuses a disabled setting. Native task otherwise ignores caller `outputSchema/schemaMode` and returns free text. Crews keeps independent host checker receipts even with valid structured output. Setup preserves sibling task settings, model roles and provider configuration; restart OMP after setup. This host setting also makes ordinary native task structured fields available, but does not remap their models.
+
+Prepare request contains `slot`, `session`, optional `profile` (`sdlc_cost_aware` default; explicit `baseline` opts out for a fresh workflow), and `workflow: {task, authority:{read,write,commands}, invariants, max_calls, nodes}`. Existing slots keep their pinned profile when omitted. Each node has `{id,stage,depends_on,roles,answers}` with existing canonical roles/task answers. Stage does not select Combo. Dependencies allow same-kind stages; unordered overlapping readers/writers are refused. Returned `next` contains at most two admitted `task {crew:...}` references; caller dispatches them explicitly.
 
 Research `context_request:true` returns an 8KiB/32-reference source-hashed packet. Observations, inferences and unresolved items stay distinct. `needs_more_context:true` forwards a bounded reread request, never a completeness claim; downstream reads only its original grants. Checkers do not receive producer conclusions. Workflow read/grep/glob paths are checked against declared inputs/read_scope/write_scope, including resolved targets. This is not an OS sandbox; explicitly admitted commands remain trusted code.
 
@@ -256,7 +260,7 @@ Dead reservation recovery requires explicit `workflow_recover` with node and, if
 
 `workflow evaluation` request wraps `{request:{operation:"freeze"|"evidence"|"attest"|"report",...}}`. SDLC freeze signs `units`, `arms` and gates. Arms bind baseline/candidate profiles, model policy, routing policy and environment; unit hashes bind initial writable contents as well as sources. `evidence` returns workflow evidence hash; `attest` signs full components (`main`, `governance`, `classifier`, `scout`, `architecture`, `producer`, `checker`, `repairs`, `context`), latency, price provenance and coverage. Report uses workflow refs, not caller scores. Failed task spend stays in cost-per-accepted numerator. Missing corpus/pricing/receipts means `NO_GO`; paired pass-to-fail cannot cancel against another task's improvement. Portable rule exports pin this contract and accept edits only under `proposal`.
 
-Default remains baseline until quality evidence permits rollout. Signed `evaluation_mode:"quality_only"` gates independent quality and host-ledger latency without prices/accounting attestations; `money_status:"not_evaluated"`, `cost_gate:null`. Omitted mode retains existing monetary gates. Canary/profile selection never changes main model or Combo effort. Provider benchmark exercises reconstructed tasks, not production-equivalence or savings.
+Operator explicitly enabled SDLC before benchmark qualification. This is user authorization, not a benchmark PASS or safety exemption. Signed `evaluation_mode:"quality_only"` gates independent quality and host-ledger latency without prices/accounting attestations; `money_status:"not_evaluated"`, `cost_gate:null`. Omitted mode retains monetary gates. Profile selection never changes main model or Combo effort. Provider benchmark exercises reconstructed tasks, not production-equivalence or savings.
 
 
 ## Safety and verification

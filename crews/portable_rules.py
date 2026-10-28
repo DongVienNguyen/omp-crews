@@ -81,7 +81,7 @@ def exchange(request,project,state):
                 context=copy.deepcopy(context);context['recipe']={key:body[key] for key in context['recipe']};context['recipe']['version']=body['version']+1
             else:raise ValueError('rule kind must be policy or recipe')
             packet=dict(format='crews-rule',version=1,export_id=uuid.uuid4().hex,kind=kind,base=dict(target=target,revision=revision(db,project,kind,target)),instructions=description,schema=schema,proposal=proposal)
-            packet['workflow_contract']=dict(version=1,profiles=['baseline','sdlc_cost_aware'],default='baseline',authority='immutable original scope',promotion='operator-approved frozen independent evidence only')
+            packet['workflow_contract']=dict(version=1,profiles=['baseline','sdlc_cost_aware'],default='sdlc_cost_aware',authority='immutable original scope',promotion='operator enablement distinct from frozen quality evidence')
             if kind=='recipe':packet['constraints']={key:body[key] for key in ('features','applicability','exclusions','max_difficulty')}
             db.execute('INSERT INTO rule_exports VALUES(?,?,?,?,?)',(packet['export_id'],project,json.dumps(packet),json.dumps(context),time.time()))
             return packet

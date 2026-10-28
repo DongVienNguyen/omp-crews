@@ -1,13 +1,13 @@
 ---
 title: "Cost-aware SDLC micro-loops với kiểm chứng độc lập"
 description: "Small thu facts và sửa được chốt; Medium thi công; Large giải quyết bất định/rủi ro, không định tuyến theo token hay số file."
-status: completed-opt-in-broad-rollout-no-go
+status: enabled-by-operator-evaluation-in-progress
 priority: P2
 tags: [routing, sdlc, cost, reliability]
 created: 2026-10-28
 ---
 
-# SDLC micro-loops — implementation candidate, rollout NO_GO
+# SDLC micro-loops — enabled by operator
 
 ## Quyết định
 
@@ -89,4 +89,4 @@ Independent planning review COMPLETE: run6ecb14f37c6c4c8aab4d55fe4fc9c9b2. Imple
 
 ## Handoff
 
-Implementation and verification complete;0.11.0 applied to main runtime and canary, both doctor ready. Canary real startup CANARY_READY. User removed monetary gate. Reconstructed corpus oracle-validated; provider V4 stopped at12arms with baseline6accepted/candidate5accepted and strict checker schema failure; broad promotion NO_GO, missing arms retained unknown. Baseline remains default, SDLC opt-in. Oracle corrections not retroactively counted. Git destination DongVienNguyen/omp-crews, branch feat/sdlc-micro-loops. Model/effort/state preserved; restart OMP/MCP required. See [verification](../../VERIFICATION.md).
+User explicitly enabled logic before benchmark qualification.0.11.1 applied; fresh workflow default sdlc_cost_aware, native crew_workflow exposes original-authority prepare/next/status, one-step direct intake unchanged. Existing manifests pinned; explicit baseline opt-out. Native task.structured default-off root cause fixed in host setup/doctor; strict yield smoke all3roles valid, real CSV native prepare/write/check complete with host behavior pass. Independent enabled-path and setup reviews COMPLETE. Full reconstructed corpus running with failures retained; changed host structured setting mid-run means mixed-condition report, not clean quality proof. Model/effort/state preserved; restart OMP/MCP required. Git branch feat/sdlc-micro-loops. See [verification](../../VERIFICATION.md).

@@ -17,5 +17,6 @@ export function createPlanRecovery() {
 
 export function isCrewPlanCall(name, input) {
  return name === 'mcp__crews_omp_crew_plan' || name === 'crew_plan' ||
+  (name === 'crew_workflow' && input?.request?.operation === 'prepare') ||
   (name === 'write' && input?.path === 'xd://mcp__crews_omp_crew_plan');
 }

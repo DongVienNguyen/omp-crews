@@ -34,7 +34,7 @@ export default function(pi:any){
    assert.throws(()=>hooks.before_provider_request({payload:{model:'code-sol',reasoning_effort:'medium'}},child),/Unexpected abort/);
    hooks.before_provider_request({payload:{model:'code-seek',reasoning_effort:'medium'}},child);
    assert.equal(hooks.tool_call({toolName:'bash',input:{command:'echo unauthorized'}},child).block,true);
-   return {content:[],details:{results:[{exitCode:0,resolvedModel:'9router/code-seek:medium',resolvedModelIdentity:'9router/code-seek',resolvedThinkingLevel:'medium',structuredOutput:{data:{status:'COMPLETE',verification:['Scripted local provider completed fixture contract']}}}]}};
+   return {content:[],details:{results:[{exitCode:0,resolvedModel:'9router/code-seek:medium',resolvedModelIdentity:'9router/code-seek',resolvedThinkingLevel:'medium',structuredOutput:{status:'valid',data:{status:'COMPLETE',verification:['Scripted local provider completed fixture contract']}}}]}};
   };
   const ref={run:plan.run_id,role:'fixture-reader',session:plan.session};
   await tools.task.execute('dispatch',{crew:ref},undefined,undefined,ctx);

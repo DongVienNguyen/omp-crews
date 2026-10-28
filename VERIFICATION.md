@@ -2,6 +2,15 @@
 
 This file records observed release checks, not a guarantee of production task quality or model equivalence. User instructions: [Vietnamese usage guide](docs/usage.vi.md). Executable owners: [governance](crews/governance.py), [automation](crews/automation.py), [portable rules](crews/portable_rules.py), [host adapter](crews/omp_adapter.py).
 
+## 0.11.1 enabled SDLC verification
+
+- Explicit operator decision enables fresh sdlc_cost_aware workflows before benchmark qualification. Native crew_workflow prepare/next/status/recheck/recover uses original grants, confirmed mutations and exact returned crew refs. Existing baseline manifests stay pinned; main model/effort/state unchanged.
+- Actual native scripted smoke calls crew_workflow prepare and dispatches scout/writer/checker; native metadata source=caller,status=valid for all roles after task.structured enabled. Real provider normal-entry CSV workflow completed writer/checker, host behavior pass. Enabled-path review1326ca8ad7094690998c51588dcfe370, strict-setup review37069e30da674510932a97dbdab2d2ee and final cutover review52f267eb07734cf2aadfcd6e5dc8a934 COMPLETE, static scope only.
+- Root cause: native OMP task.structured defaults false and discards caller outputSchema/schemaMode. Setup now enables true inside registration transaction, doctor refuses false, model roles/sibling task keys preserved. Checker brief has one status/verification/criterion_results envelope; no lenient JSON repair. Restart OMP/MCP required.
+- Workflow/default/pinned-history, plan schema,27-row routing, quality-only, immutable attempt/repair/recovery/partial ownership, authority, keyless/governance/recipes/learning regression checks passed. Strict native yield smoke asserts source=caller,status=valid for all3roles; invalid/unavailable metadata cannot become COMPLETE. Windows directory-symlink case unavailable.
+- Packaging11/11passed in separate bounded selections:10public-interface checks (128.937s) and real lifecycle setup/repeat/relocate/doctor/migration rollback/uninstall/reinstall with disabled-structured repair (595.369s), pinned offline wheelhouse. Previous600s online-index timeouts retained, not PASS. Isolated setup probe confirmed modelRoles, sibling task settings and unrelated config unchanged. Dependency pins unchanged.
+- Full reconstructed provider corpus retains every failed arm and runs to original64-arm schedule. Host task.structured changed during execution; report is mixed-condition evidence, not clean noninferiority proof. Enablement authorization does not rewrite quality/latency gates or old NO_GO results. Money not evaluated.
+
 ## 0.11.0 SDLC verification
 
 - Permanent checkout contract suites passed: typed routing27rows/27boundaries, workflow ordering, source scope, two-child correlation, immutable attempts, criterion strikes, successor/partial ownership, two repairs with independent rechecks, dead reservation/orphan recovery, signed quality-only and monetary evidence boundaries.
