@@ -2,6 +2,8 @@
 
 Policy-gated Crews planning, classification and native OMP agents. AgentKit owns workflows; this plugin routes admitted crew roles, not main chat or unrelated native tasks. Plans bind model/effort, scoped tools, exact shell commands and completion receipts.
 
+**[Hướng dẫn sử dụng đầy đủ bằng tiếng Việt](docs/usage.vi.md)** — cài từ Git, cấu hình Combo, vận hành không key, gia hạn tự động, copy/dán rule cho AI ngoài, cập nhật và xử lý lỗi.
+
 ## Requirements
 
 - OMP with native `ctx.invokeTool`, `before_subagent_spawn` and provider payload hooks. Unsupported hosts refuse crew dispatch. See [verification evidence](VERIFICATION.md) for host limitations.
@@ -25,6 +27,8 @@ node <absolute-package-root>/bin/crews-omp.mjs doctor --json
 For a local `.tgz`, extract it and link extracted `package/` directory. Direct tarball installation is not supported on the recorded OMP host. Do not also add extension manually to config.yml: duplicate roots can install competing task wrappers. Restart OMP after package changes, especially on Windows.
 
 Setup is explicit and idempotent: it provisions private runtime and owner-marked MCP registration. No install/update runs on startup. `--register-plugin` asks CLI to link package through OMP. `--offline` requires valid existing runtime or dependency wheels via `CREWS_OMP_WHEELHOUSE`; missing dependencies fail visibly.
+
+Setup enables local-account Large policy governance by default. No private signing key, signed grant file or key migration is needed on a new machine/user installation. Provider login remains required. Automatic review can consume Large provider tokens. Local policy trusts the OS account running OMP, not cryptographic human identity; arbitrary same-user code that can modify state/code is outside this boundary.
 
 Shared target options are `--python PATH`, `--agent-dir PATH`, `--state-dir PATH`, `--profile NAME` and `--json`. Use CLI `--help` for current flags. `CREWS_OMP_HOME` and `CREWS_OMP_AGENT_DIR` support isolated state and agent roots; choose same profile/paths for setup, doctor and later lifecycle operations. Do not accidentally share profile credentials/state. Relative OMP `PI_CONFIG_DIR` resolves against home, not current directory.
 
@@ -63,7 +67,17 @@ Each role uses its own need and difficulty, not task-level or sibling classifica
 
 `everyday_implementation` stays its real need but may execute Small when kind is produce, role difficulty <=1.5, scope contains 1–3 explicit files, and `facts` explicitly set targets_fixed/behavior_fixed/scope_bounded/deterministic_check true and behavior_undecided/unknown_cause/consequential_judgment/cross_system/concurrency_sensitive false. Missing facts retain Medium. Supply `bounded_check:{"input":"check.mjs","command":"node check.mjs"}`: checker must exist in inputs outside every writer scope and command must exactly match an admitted command. This checks declared authority/ownership, not semantic correctness of arbitrary checker code. The independent reviewer still owns acceptance. No implicit retry: Small failure requires recorded repair/escalation; target Combo configuration is respected.
 
-`requested_combo` means baseline capability mapping before this optimization; `effective_combo` is the executed Combo. A bounded Medium->Small role retains need everyday_implementation and reports bounded_small=true, including after explicit escalation.
+`requested_combo` means baseline capability mapping before this optimization; `effective_combo` is the latest selected Combo, not execution proof. A bounded Medium->Small role retains need everyday_implementation and reports bounded_small=true, including after explicit escalation. Native/wire evidence is required to claim execution.
+
+### Routine implementation on Small
+
+For fixed local behavior, a produce role with need `everyday_implementation`, difficulty <=1.0 and 1–3 explicit files may use `routine_check:"check-role-name"` instead of a pre-existing deterministic checker. Explicit facts targets_fixed/behavior_fixed/scope_bounded must be true; behavior_undecided/unknown_cause/consequential_judgment/cross_system/concurrency_sensitive must be false. Missing facts retain Medium. The linked read-only check must carry every original acceptance criterion verbatim, declare every produced artifact in inputs, and actually dispatch in a later wave; invalid checker authority rejects the plan. Declare task needs_verifier so the existing budget includes this checker.
+
+The checker independently validates behavior and any producer-written tests; it receives no producer conclusions. Executable checker scripts must exist in its inputs outside all writer scopes. Inline evaluation, shell substitution and module execution are not admitted by this optimization. This is an authority guard, not a sandbox or a proof that arbitrary commands are safe. Each checker still needs narrowly reviewed commands. A read-only inspection checker may have no shell authority.
+
+`small_route` is bounded, routine or null; `small_blockers` explains each failed eligibility gate. `bounded_small` retains its historical bounded-route meaning. Baseline requested_combo and initial small_route survive escalation; effective_combo records the latest admitted selection, not proof of execution. Routing policy changes require fresh plans, even when model bindings are unchanged. Single-role preview without sibling context cannot establish routine eligibility.
+
+Intake warnings flag declared implementation/review needs when explicit facts instead describe a bounded lookup or deterministic check; declarations are not silently rewritten. Classify each deliverable, not the hardest part of its parent project. No Small quota, automatic safety facts or learned downgrade.
 
 ```text
 crews-omp combo show --json
@@ -82,10 +96,83 @@ Policy changes invalidate old plan bindings, including effort-only changes. Crea
 - `/crew history`: project-scoped routing/status without prompts.
 - `/crew reload`: validate config and invalidate cached recommendations, not running tickets.
 - `/crew report`: persisted project crew counts/usage/coverage/escalations plus current-session main/native-task/crew event counts. `crews-omp report --project <project> --json` returns persisted crew-only data. Session event counts are not task counts; unknown usage is not zero cost.
+- Reports separate baseline/effective Combo, latest statuses, Small eligibility blockers and native-model evidence coverage. Counts include planned and archived roles and are not provider attempt counts; unknown archived Combo remains unknown.
 
 `crew_preview` exposes same operations headlessly. Python MCP `crew_test` is deterministic only. Facts are tri-state true/false/unknown; absence never means false. Declared need/difficulty takes precedence unless safety facts contradict it. Unknown cause or consequential judgment cannot be mislabeled as cheap lookup. File counts do not establish difficulty. [Routing corpus](examples/routing-corpus.json) covers bilingual deterministic cases; [classification source](crews/classification.py) owns rubric.
 
 Canonical `task` intake contains `intake:{spec,answers,session}`. `spec` uses task plus roles with name/kind/mission/deliverable, scope/commands/acceptance and flat role answers. Only `classification:true` may omit need/difficulty; `divisible` and `specific` remain required. [MCP minimal example](omp_server.py) supplies explicit canonical plan shape. Intake returns references, not execution; dispatch each returned `crew:{run,role,session}` through task. It never invents scope, commands, acceptance or model selectors. Invalid/unresolved plans block ordinary delegation rather than falling back silently.
+
+## Verified outcomes and adaptive recipes
+
+Execution and behavior are separate. A provider/tool/schema/cancel failure does not become a behavioral negative. Unknown usage/pricing stays unknown. Reports include independent behavior, delivery outcomes, producer claim contradictions and verified Small counts. Legacy results remain unchanged; new outcome metadata is versioned.
+
+For executable verification, a check role declares `checker_profile:{input,command,version}` and `verify_targets:[producer-name]`. It must read every producer artifact and carry every acceptance criterion. Profile script is existing, project-contained and outside every writer scope; command is exact admitted Python/Node/Bun script invocation. The host runs that immutable profile and records actual exit, script/artifact hashes and machine JSON output. Script stdout must be one JSON object containing `criterion_results:[{criterion:exact_original_text,status:"pass"|"fail"}]` in original order. Model text or caller exit-code claims are not execution proof. Scripts must test actual behavior and boundary/error semantics; a signed profile approval does not prove a weak checker meaningful.
+
+`crew_shape` validates a caller-supplied role proposal inside explicit read/write/command authority and requires a cross-cutting invariant checker. It returns a proposal, not admission; it never invents scope or changes declared difficulty. Resolve open decisions with an appropriately classified role before bounded Small edits. `crew_recipes`, `/crew recipes` and `crews-omp recipes` expose the recipe lifecycle. `crew_recipe_preview` is read-only and does not reserve hits or create labels.
+
+Recipes use structured `recipe_features` (domain/language/operation/invariant/dependency_shape), immutable version, cue/lesson/evidence/negative examples, applicability/exclusions, independent profile and pinned model binding. Matching ignores wording/target names but revalidates current safety facts, scope, checker, invariant, model revision and profile hashes. `recipe_confirmed:true` reserves a hit only after an operator-approved active recipe and mode on; otherwise default shadow/abstain. Recipe guidance is untrusted context, never new authority. Explicit `model_revision` is required for effective use; hosted-provider revision changes hidden behind an unchanged identifier cannot be detected automatically.
+
+### Advanced direct signed administration
+
+Direct recipe administration outside the automatic Large workflow uses operator-signed exact requests; `--yes` alone is insufficient for that advanced interface. Normal installation and automatic governance do not require these keys. Never ask an agent to read/generate/carry a real private key or replace operator-public.pem. Existing signed artifacts remain project/request-bound.
+
+Default governance uses local-account trust and native role tool authority. Crews is not an OS sandbox: arbitrary same-user processes able to replace state/code are outside protection. Use OS-separated accounts/ACLs or a container for hostile arbitrary code. Receipt checks prevent model text from becoming machine proof; they do not claim same-user root resistance.
+
+Automatic evidence uses host-authenticated non-learned verified snapshots and deterministic source-hash train/holdout split. Initial supported defaults are >=59independent passing units, >=5holdout and95% failure bound<=5%; Large can adjust supported typed policy, including disabling promotion or using shadow mode when evidence is weak. Learned outputs audit only, never self-train. Failures/unknown suspend and preserve history; correlated variants are not independent production evidence.
+
+### Keyless automatic Large policy governance
+
+Normal installation uses local policy rather than manual grant signing. Setup creates installation identity; first project use queues independent Large aggregate review. Only typed policy returned by host-authenticated native Large completion can renew the execution lease or change supported Crews settings. Main model remains unchanged. Large may adjust role-to-Combo routing, recipe mode/auto-evidence, supported promotion thresholds, difficulty ceiling, audit cadence and review budget/lease. It cannot modify verifier code, file/command authority, credentials, historical receipts or task acceptance.
+
+Lease expiry or exhausted per-lease review budget schedules governance review, not permanent manual lockout. Successful review renews within the supported policy schema; denied/malformed review pauses instead of silently continuing. No user reminder/calendar or old-machine private key is needed. New installations create local identity; copied recipe evidence is not automatically execution authority. Explicit disable remains sticky across setup/restart; Large cannot undo it.
+
+```text
+crews-omp automation status --project PATH --json
+crews-omp automation disable --project PATH --yes --json
+crews-omp automation enable --project PATH --yes --json
+```
+
+Original task must still supply safe facts, explicit artifacts, model revision and independent immutable checker. Role classification is per-role, not whole-project. Routing overrides cannot authorize unsafe Small execution. Unknown/failing checker suspends; learned runs do not train themselves. Native receipts and actual checker behavior remain evidence, never model self-COMPLETE.
+
+OMP drains stored review jobs after task completion. Startup pending queue directs `task {automation:true}`; host chooses jobs. There is no worker while OMP is closed. Admission/epoch/replay guards retain interrupted/failed history; no silent duplicate execution. Direct signed recipe/accounting/evaluation administration remains a separate advanced interface, not installation prerequisite. If using that signer, `PRIVATE_KEY` must name a new file, not a directory; never supply signing key contents to an agent.
+
+### Copy rules to an external AI and paste optimized proposals
+
+Use `/crew rules`: export policy or a recipe ID, copy JSON from editor, ask external AI to edit only `proposal`, then choose import and paste returned JSON. CLI equivalent for policy:
+
+```powershell
+$src = "$env:USERPROFILE\.local\share\crews-omp\source"
+$project = "C:\path\to\project"
+node "$src\bin\crews-omp.mjs" automation export --project "$project" --json | Set-Clipboard
+# Paste clipboard into external AI. Save returned crews-rule JSON as optimized-rule.json.
+node "$src\bin\crews-omp.mjs" automation import --project "$project" --request optimized-rule.json --yes --json
+```
+
+Packet `format:crews-rule, version:1` includes edit instructions/schema, immutable export ID/base revision and editable proposal. Policy proposal is full supported policy; recipe proposal edits only cue/lesson/steps/negative examples and includes invariant constraints. It exports no keys, receipts, raw source/task or execution authority; review your own guidance text for sensitive content before sharing. External AI must preserve every field except proposal and return one JSON object (single fenced json block accepted).
+
+Import queues independent Large review; paste never directly activates. Stale base, foreign project/export, changed immutable context, extra authority, duplicate JSON keys or nonfinite values refuse. Export fresh packet if policy/recipe changed. Repeated identical paste deduplicates. Approved recipe edits create new immutable candidate version with no inherited training/active state and suspend superseded version. Missing original reviewed recipe authority refuses export rather than inventing context. Legacy exact classification rules and raw agent prompts are not editable through this packet. On another machine export a fresh local packet, transfer optimized proposal only, then review there.
+
+
+
+`probe` consumes fresh paired run references, keeps baseline on ambiguity/regression/missing accounting and never grants routing authority. `crew_account` or CLI `account --request SIGNED_JSON --project PATH --yes` records independently attested complete-run accounting (producer/checker/classifier/main/repairs and pricing provenance). Zero provider metadata is not verified pricing. Probe selection requires that complete accounting; no cost-saving claim without it.
+
+`crew_recover` or CLI `recover --request JSON --project PATH --yes` reconciles an admitted dispatch only after the recorded host PID is proven dead. Unknown/live ownership refuses. It atomically marks interrupted/unknown behavior and revokes ephemeral tickets; it never replays or fabricates COMPLETE. Retry/escalation counters remain intact. Older admissions without owner metadata need explicit investigation, not guessed cleanup.
+
+```text
+crews-omp recipes status --project PATH --json
+crews-omp recipes register --project PATH --request SIGNED_REQUEST.json --yes --json
+crews-omp recipes evidence --project PATH --request SIGNED_RUN_REFERENCE.json --yes --json
+crews-omp recipes activate --project PATH --request SIGNED_REQUEST.json --yes --json
+crews-omp recipes configure --project PATH --request SIGNED_REQUEST.json --yes --json
+```
+
+No recipe is auto-registered/activated by installation; no old pilot label is imported. Exact user-labelled learning remains separate and unchanged. New versioned recipe tables share learning.sqlite; receipt/evidence-backed runs remain retention-protected. Main model and ordinary native tasks are unchanged. Use fresh OMP/MCP processes after package cutover; existing tickets never silently change recipe/model/policy.
+
+`crew_evaluate` freezes an operator-signed unit manifest before runs: source groups cannot cross train/holdout, before/acceptance hashes bind each unit, and results must match fresh authoritative paired evidence. It reports per-family behavior and delivery, abstention from persisted policy decisions (not caller claims), complete-run cost, P95 and missing coverage. Any ambiguity/regression/missing accounting retains baseline; GO is never forced. Reusing old pilot outcomes as a newly frozen holdout is refused by timestamps.
+
+`crew_runner` prepare/status persists a unique run-slot reservation before planning. Existing slot/spec/session mismatch refuses; restart exposes only a still-planned role, never replays admitted/failed/completed work or resets artifacts. A crash between reservation and run-link returns an explicit recovery blocker rather than creating another plan. `crew_storage` provides status, dry-run cleanup, confirmed destructive cleanup/compact, using the same retention engine as CLI.
+
+Recipes expire after30days by default (operator may choose1..90days) and retain predecessor rollback provenance; newest invalid/rolled-back version never silently falls back to an older recipe. Existing exact learning privacy remains HMAC-based; recipe lessons are intentionally project-local operator-approved text and must not contain secrets. Audit events and recipe evidence persist for traceability, not model instructions.
 
 ## Large teacher and verified local learning
 
@@ -120,7 +207,7 @@ Candidates are shadowed, not automatically activated. Every tenth active match b
 
 ### Privacy, metrics and retention
 
-Learning persists keyed HMAC project/task/context fingerprints, boolean safety facts, numeric labels and bounded metrics in `learning.sqlite`, with local `learning.key`. It does not store raw task, source content, file paths, commands, evidence text or credentials in the learning DB. Ordinary Crews records/transcripts retain their existing brief/evidence behavior; this is not a claim that all plugin storage is secret-free. Teacher request still sends bounded role text through the configured provider.
+Exact classification learning persists keyed HMAC project/task/context fingerprints, safety facts, numeric labels and bounded metrics, not raw task/source/credentials. Recipe and automation tables in the same learning.sqlite also retain reviewed guidance, scoped role context and evidence references; portable-rule export stores the original packet/context for safe re-import. Treat the database and normal Crews records/transcripts as private project data. Teacher/governance requests send bounded task or aggregate context through the configured provider.
 
 Capacity is 10000 observations / bounded SQLite pages; full capacity drops new observations visibly rather than training or silently deleting evidence. Reports separate verified-label agreement, errors, observed teacher calls, local calls avoided, tokens and latency with unknown coverage. These counters are not a real-task quality/cost benchmark. `crews-omp learning purge --project <project> --yes --json` explicitly removes that project's learned data. Uninstall/upgrade/reinstall preserve learning state by default; never package state DB/key. Back up sensitive local state separately.
 

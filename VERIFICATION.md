@@ -1,30 +1,54 @@
-# crews-omp 0.6.0 — compact storage
+# Verification and operating limits
 
-- New dispatch stores admission/token binding and provider receipt in SQLite, no ticket/wire JSON. Final role result is stored once; earlier record files materialize only when a later wave needs upstream file context. Completion revokes admission and removes transient receipt rows.
-- Admission+token creation is one transaction. Trigger-failure regression proves insertion failure leaves role planned, not stranded admitted. Late receipt insertion rechecks current token/status under write lock. Legacy JSON tickets/receipts remain valid read-only until expiry, not issued for new work.
-- Storage status/dry-run are read-only; cleanup recomputes under lock, protects fresh/live/learning-backed state, archives full payloads after7days and caps summaries90days/1000runs. Learning protection holds a real readonly transaction through archive commit. Durable pending-file queue retries failed unlink even after run row archival. Symlink/unknown files preserved.
-- Compact refuses active work, uses exclusive SQLite locking/checkpoints and reports actual bytes. Automatic cleanup attempts run at most daily after new plan creation, auto_cleanup opt-out supported; no automatic compact/learning purge/backup or runtime deletion.
-- Storage regression covers dry-run bytes unchanged, active/live/protected observations, age/summary limits, SQL rollback, failed unlink retry, learning writer commit blocking, no-follow paths, checkpoint busy/refusal, actual reclaim. Archived history/report remain visible but cannot execute. SQLite-only lifecycle and native read/producer-write/Large-teacher flows pass.
-- Global preview/snapshot then cleanup archived52 expired runs and deleted339 legacy JSON files, pruned138 expired token bindings. Records113->41, tickets141->3, wire130->1; one unknown wire JSON retained/reported. Learning DB and key byte-identical. Compact1150976->430080bytes (720896reclaimed); initial pre-migration DB1089536bytes. Retained19protected runs. Numbers are a point-in-time cleanup result, not a storage-size guarantee.
-- Snapshot was SQLite backup API plus compressed legacy JSON under active state/backups, retained for recovery. Final packaging suite11passed0failed (124.7seconds), including actual provision/upgrade/relocation/uninstall/reinstall and storage admin gates. No public credentials or state included.
+This file records observed release checks, not a guarantee of production task quality or model equivalence. User instructions: [Vietnamese usage guide](docs/usage.vi.md). Executable owners: [governance](crews/governance.py), [automation](crews/automation.py), [portable rules](crews/portable_rules.py), [host adapter](crews/omp_adapter.py).
 
-## Historical 0.5.0 evidence
+## 0.10.0 release evidence
 
-# crews-omp 0.5.0 — bounded Small rollout
+Recorded on Windows with Python 3.12, Node.js 24 and OMP native task support:
 
-- Eight Python contract scripts pass, including bounded implementation, verified feedback/current fingerprints, role-local routing, report usage coverage, UTF-8, replay and escalation. Shadow sampling tests prove teacher disagreement never changes declared answers and preview/off/dedup/caps hold.
-- Packaging suite9passed0failed; final observed169seconds includes actual isolated Python provision, profiles, report/feedback CLI, upgrade/rollback/relocation/uninstall/reinstall.
-- Actual OMP local-provider lifecycle covers both read-only child and bounded producer write; parent independently parses written artifact and matches wire/native receipt. This catches the previously missing admittedWrite import, now restored.
-- Cloud bounded slug smoke run f73a61b909294bf7a77ccac30684c8bb remains FAILED/BLOCKED, not PASS. Two pre-request cancellations traced to missing reasoning:true in global models metadata (restored); final same-seat repair reached model but encountered missing admittedWrite import. Guard import fixed and local-provider write reverified. Repair counters were not reset and cloud run not replayed beyond cap. No cloud coding-quality/cost improvement claimed.
-- Baseline requested_combo Medium, effective_combo Small, bounded_small metadata preserves original need everyday_implementation; explicit escalation follows actual Combo. Rules require <=1.5 difficulty, explicit safe facts,1–3files and a preexisting checker outside every writer scope. This is declared capability plus independent acceptance, not automatic proof a checker is meaningful.
-- /crew report separates persisted crew metrics from current-session main/native event counts. Unknown usage remains unknown. /crew learning Verified Small result requires real receipt plus explicit human confirmation; no automatic labels or fuzzy generalization added.
-- Storage investigation only: no retention cleanup, SQLite purge, JSON deletion or VACUUM was performed. Storage commands previously discussed are proposals, not shipped features.
+- Package lifecycle suite: **11 passed, 0 failed, 0 skipped**. Covers isolated setup/repeat/relocate/doctor, native plugin registration, migration transaction rollback, uninstall/reinstall, policy/config preservation and storage interfaces.
+- Keyless lifecycle checks: setup without signing keys; authenticated typed policy application; lease/quota renewal; stable project identity; sticky disable; copied account/state identity refusal; stale tickets and fresh inactive plans refused; caller-supplied governance markers refused; expired unfinished governance receives a new generation.
+- Denied or malformed governance results remain paused even when the recorded plan expires before application. Routing snapshot race checks reject policy changes between role selection and plan persistence.
+- Portable rule checks: policy and recipe guidance round-trip through the review queue; immutable host-side export snapshot, project/revision and strict integer version checks; duplicate JSON keys, nonfinite input, extra authority, foreign and stale packets refused. Recipe edits create a new candidate with no copied training/holdout evidence and suspend the superseded version.
+- Existing recipes, outcomes, classification, effort, plan contracts and storage checks passed during implementation. Direct signed advanced administration continues to reject unsigned/tampered/replayed requests.
+- Actual CLI export produced a raw `crews-rule` packet; importing an edited proposal queued review without changing policy first. Duplicate pasted JSON keys were rejected.
+- Actual native Large/high reviews returned typed policy decisions with matching native/wire evidence and host-authenticated completion. Host applied initial governance and an externally optimized policy proposal. These runs exercised real model judgment, unlike synthetic fixture receipts.
+- Independent read-only Large review found no remaining concrete blocker in the inspected keyless governance and portable-rule paths after corrections. Earlier failed reviews were not counted as successful evidence.
+- Publication checkout recheck passed: keyless, portable rules, public plan contracts, actual OMP local-provider bounded-write lifecycle, and packaging **11/11** (275.715 seconds). All local documentation links resolved; eleven PowerShell example blocks parsed successfully without executing install/destructive commands. Package dry-run included the usage guide and contained no local state/key/log payload.
 
-## OMP 18.12.6 post-update verification — 2026-10-22
+The checked-in `check_keyless.py`, `check_portable_rules.py`, `check_automation.py` and related checks use isolated fixture model receipts to test host contracts. They do **not** prove that a real model judged every fixture correctly. Real native smoke evidence is a separate observation.
 
-- Host: OMP `18.12.6`; plugin inventory contains one enabled `crews-omp 0.4.0` extension and no duplicate Crews plugin. `doctor --json` reports `ready`; all Small/Medium/Large aliases present with Auto-required low/medium/high capabilities.
-- All Python contracts pass after update: learning privacy/holdout/audit, classification, MCP plan schema, Combo effort/remap, role-local routing, bridge stale/replay. All Node checks pass: classifier bounds, adaptive promotion/audit/rollback, editor confirmation, write scope, runtime ownership, lifecycle.
-- Packaging suite: 8 passed, 0 failed/skipped, including learning DB retention across setup/upgrade/relocation/uninstall/reinstall.
-- Fresh post-update native teacher/local lifecycle pass: Large/high teacher resolves unresolved role, Small/medium child reads fixture and returns strict COMPLETE with matching native/wire receipt; learning observation stored, labels remain zero. Local provider test passes after update.
-- Current global learning status: shadow, zero observations/labels/teacher calls; Combo policy all three Auto. Catalog classifier identity is Large/high. No automatic learning rule is active.
-- No update-induced behavior change observed. Existing state, credentials, Combo policy and main chat model remain unchanged. Restart OMP/MCP sessions after update remains required.
+## Reproducing focused checks
+
+Use the provisioned runtime printed by `setup`; do not install test dependencies into system Python:
+
+```text
+<runtime-python> -B check_keyless.py
+<runtime-python> -B check_portable_rules.py
+<runtime-python> -B check_automation.py
+<runtime-python> -B check_recipes.py
+<runtime-python> -B check_outcomes.py
+<runtime-python> -B check_plan_contract.py
+<runtime-python> -B check_classification.py
+<runtime-python> -B check_effort_policy.py
+<runtime-python> -B check_storage.py
+node check_lifecycle.mjs --bounded-write
+npm run test:packaging
+```
+
+`check_lifecycle.mjs` launches the real OMP/native task path with an isolated local scripted provider. It checks admission, model/effort receipts, read/write behavior and strict completion; it does not measure production provider quality. Packaging fixtures create temporary runtimes and can take longer than focused checks.
+
+## Limits
+
+- Local-account trust is deliberate. Crews extension checks are not an OS sandbox and do not protect against arbitrary code that can alter the same user's state or package files. No signing private key is needed for default setup.
+- Main chat model and unrelated native task paths are not remapped by Crews. Role routing is not proof of execution until matching receipts exist.
+- The current host requires a restart after package/schema changes. Incomplete/failed work is not silently replayed; policy or artifact drift requires a fresh authorized plan.
+- The interactive `/crew rules` editor is integrated but has not received direct visual TUI verification in the recorded release run. Backend and actual CLI round-trip were exercised.
+- Linux/macOS lifecycle parity has not been demonstrated by the recorded Windows checks.
+- No claim of production noninferiority, absolute correctness, monetary savings, or backend model identity beyond configured provider/native receipts. Missing pricing/accounting stays unknown; zero provider metadata is not verified free usage.
+- Lease renewal does not itself renew expired recipe validity or revive suspended/rolled-back recipes. Fresh evidence and the relevant review gates still apply.
+- No background worker runs while OMP is closed. Review resumes through the host when OMP is used again.
+
+## Prior compatibility
+
+The release retains project-scoped exact classification learning separately from recipe learning; human capability labels are not created from model self-COMPLETE. Admission/results remain SQLite-backed; historical counters and records are preserved. Existing signed accounting/evaluation and direct advanced recipe administration remain separate from normal keyless setup. See the usage guide before migrating, cleaning storage or copying data to another machine.
