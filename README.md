@@ -150,6 +150,8 @@ node "$src\bin\crews-omp.mjs" automation import --project "$project" --request o
 
 Packet `format:crews-rule, version:1` includes edit instructions/schema, immutable export ID/base revision and editable proposal. Policy proposal is full supported policy; recipe proposal edits only cue/lesson/steps/negative examples and includes invariant constraints. It exports no keys, receipts, raw source/task or execution authority; review your own guidance text for sensitive content before sharing. External AI must preserve every field except proposal and return one JSON object (single fenced json block accepted).
 
+Import also accepts the exact UI export result envelope `{"changed":false,"packet":{...}}`; edit only `packet.proposal` in that form. The inner packet keeps integer `version:1`. Envelope normalization does not bypass packet revision, schema or Large review checks.
+
 Import queues independent Large review; paste never directly activates. Stale base, foreign project/export, changed immutable context, extra authority, duplicate JSON keys or nonfinite values refuse. Export fresh packet if policy/recipe changed. Repeated identical paste deduplicates. Approved recipe edits create new immutable candidate version with no inherited training/active state and suspend superseded version. Missing original reviewed recipe authority refuses export rather than inventing context. Legacy exact classification rules and raw agent prompts are not editable through this packet. On another machine export a fresh local packet, transfer optimized proposal only, then review there.
 
 

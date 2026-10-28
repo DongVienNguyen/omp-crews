@@ -23,6 +23,11 @@ def parse(value):
         value=json.loads(value,object_pairs_hook=pairs,parse_constant=lambda v:(_ for _ in ()).throw(ValueError('nonfinite rule value')))
     if not isinstance(value,dict):raise ValueError('rule packet JSON object required')
     if len(json.dumps(value,allow_nan=False).encode())>262144:raise ValueError('rule packet exceeds 256 KiB')
+    if 'packet' in value and 'format' not in value:
+        if set(value)!={'changed','packet'} or value['changed'] is not False or not isinstance(value['packet'],dict):
+            raise ValueError('invalid rule export envelope; paste a crews-rule packet or {changed:false,packet:{...}}')
+        value=value['packet']
+    if value.get('format')!='crews-rule':raise ValueError('expected crews-rule packet; format/version belong inside the packet object')
     return value
 
 

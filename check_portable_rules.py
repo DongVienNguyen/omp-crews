@@ -20,6 +20,11 @@ def run():
         queued=a.dispatch(request,folder,folder)
         assert queued['applied'] is False and a.audit_interval(folder,folder)==10
         assert a.dispatch(request,folder,folder)['job_id']==queued['job_id']
+        envelope={'changed':False,'packet':changed}
+        for pasted in (envelope,json.dumps(envelope),'```json\n'+json.dumps(envelope)+'\n```'):
+            wrapped=a.dispatch(dict(operation='import',confirmed=True,packet=pasted),folder,folder)
+            assert wrapped['job_id']==queued['job_id'] and wrapped['state']=='queued' and wrapped['applied'] is False
+        assert a.audit_interval(folder,folder)==10,'wrapped paste applied policy without review'
         ref=a.next_review(folder,folder)
         review(ref,folder,dict(decision='approve',policy=changed['proposal'],reason='fixture external optimization accepted'))
         assert a.next_review(folder,folder) is None
@@ -31,6 +36,10 @@ def run():
         for version in (True,1.0):
             bad=copy.deepcopy(fresh);bad['version']=version
             rejects(lambda:a.dispatch(dict(operation='import',confirmed=True,packet=bad),folder,folder))
+        bad=copy.deepcopy(fresh);bad['version']=True
+        rejects(lambda:a.dispatch(dict(operation='import',confirmed=True,packet={'changed':False,'packet':bad}),folder,folder))
+        for wrapper in ({'changed':True,'packet':fresh},{'changed':False,'packet':fresh,'approval':True},{'changed':False,'packet':json.dumps(fresh)}):
+            rejects(lambda:a.dispatch(dict(operation='import',confirmed=True,packet=wrapper),folder,folder))
         bad=copy.deepcopy(fresh);bad['proposal']['write_scope']=['*']
         rejects(lambda:a.dispatch(dict(operation='import',confirmed=True,packet=bad),folder,folder))
         with tempfile.TemporaryDirectory(prefix='crews-rules-other-') as other:
@@ -39,6 +48,7 @@ def run():
         rejects(lambda:parse('{"version":1,"version":2}'))
         rejects(lambda:parse('Here is JSON '+json.dumps(fresh)))
         rejects(lambda:parse('{"value":NaN}'))
+        rejects(lambda:parse('{"changed":false,"packet":{"format":"crews-rule","version":1,"version":2}}'))
         from crews import recipes,omp_adapter as adapter,outcomes
         from check_effort_policy import task_answers
         from check_automation import complete

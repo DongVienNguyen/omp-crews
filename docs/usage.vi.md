@@ -228,6 +228,8 @@ node "$src\bin\crews-omp.mjs" automation export --project "$project" --request .
 
 `crews-rule` version1 là **đề xuất có thể mang đi**, không phải quyền thực thi:
 
+Importer nhận packet trực tiếp hoặc kết quả export đầy đủ dạng `{"changed":false,"packet":{...}}` mà `/crew rules` hiển thị. Nếu copy cả kết quả này, chỉ sửa `packet.proposal`; giữ `changed:false`. `version:1` nằm trong `packet`, không cần thêm version ở lớp ngoài. Envelope không được chứa trường phụ hoặc packet lồng nhiều lớp; mọi kiểm tra revision/context và review Large vẫn áp dụng.
+
 - Policy: `proposal` là toàn bộ policy được schema hỗ trợ.
 - Recipe: chỉ sửa `cue`, `lesson`, `recipe_steps`, `negative_examples`. Invariant/checker/model/evidence không được thay.
 - Hệ thống giữ snapshot gốc tại project export. Sai version, thay context, packet từ project khác hoặc base đã thay đổi sẽ bị từ chối.
