@@ -29,9 +29,10 @@ try {
     console.log('\nStorage: storage status (read-only) | cleanup [--dry-run | --yes] | compact --yes\nStorage commands use selected --state-dir / --profile; cleanup previews by default.');
     console.log('\nAdaptive: recipes status|lookup|register|evidence|activate|audit|rollback|configure|probe --project PATH [--request JSON_FILE] [--yes]\nRecovery: recover --project PATH --request JSON_FILE --yes (dead admitted dispatch owner only)');
     console.log('\nAutomation: automation enable|disable|status|export|import --project PATH [--request JSON_FILE] [--yes]\nSetup enables keyless local policy governance. Export JSON to external AI; edit proposal only; import queues Large review, never direct apply.');
+    console.log('\nWorkflow: workflow prepare|status|next|recheck|recover|attempts|evaluation --project PATH --request JSON_FILE [--yes]\nStage dependency plans are opt-in; execution uses admitted task crew references, never replay.');
     return;
   }
-  const action = ['combo','learning','storage','recipes','automation'].includes(command) && args[0] && !args[0].startsWith('--') ? args.shift() : ['learning','storage','recipes','automation'].includes(command) ? 'status' : 'show';
+  const action = ['combo','learning','storage','recipes','automation','workflow'].includes(command) && args[0] && !args[0].startsWith('--') ? args.shift() : ['learning','storage','recipes','automation','workflow'].includes(command) ? 'status' : 'show';
   const comboFlags = ['provider', ...['small','medium','large'].flatMap(name => [`${name}-model`, `${name}-effort`])];
   const changes = {};
   const valueOptions = {'--python':'python','--agent-dir':'agentDir','--state-dir':'state','--profile':'profile','--expected-hashes':'expectedHashes','--backup':'backup'};
@@ -41,19 +42,19 @@ try {
     const arg = args.shift();
     if (Object.hasOwn(switches,arg)) options[switches[arg]] = true;
     else if (Object.hasOwn(valueOptions,arg) && args[0] && !args[0].startsWith('--')) options[valueOptions[arg]] = args.shift();
-    else if (['recipes','automation','recover','account'].includes(command) && arg==='--request' && args[0])options.request=args.shift();
-    else if (['recipes','automation','recover','account'].includes(command) && arg==='--project' && args[0])options.project=args.shift();
-    else if (['recipes','automation','recover','account'].includes(command) && arg==='--yes')options.yes=true;
+    else if (['recipes','automation','workflow','recover','account'].includes(command) && arg==='--request' && args[0])options.request=args.shift();
+    else if (['recipes','automation','workflow','recover','account'].includes(command) && arg==='--project' && args[0])options.project=args.shift();
+    else if (['recipes','automation','workflow','recover','account'].includes(command) && arg==='--yes')options.yes=true;
     else if (command === 'report' && arg === '--project' && args[0] && !args[0].startsWith('--')) options.project = args.shift();
     else if (['learning','storage'].includes(command) && arg === '--yes') options.yes = true;
     else if (command === 'learning' && Object.hasOwn(learningOptions,arg) && args[0] && !args[0].startsWith('--')) options[learningOptions[arg]] = args.shift();
     else if (command === 'combo' && action === 'set' && comboFlags.includes(arg.slice(2)) && arg.startsWith('--') && args[0] && !args[0].startsWith('--')) changes[arg.slice(2)] = args.shift();
     else throw new Error(['learning','storage'].includes(command) ? `Unknown or incomplete ${command} argument` : `Unknown or incomplete argument: ${arg}`);
   }
-  if (!['setup', 'doctor', 'combo', 'learning', 'storage', 'report', 'recipes', 'automation', 'recover', 'account', 'migrate', 'uninstall', 'rollback'].includes(command)) throw new Error('Unknown crews-omp command');
+  if (!['setup', 'doctor', 'combo', 'learning', 'storage', 'report', 'recipes', 'automation','workflow', 'recover', 'account', 'migrate', 'uninstall', 'rollback'].includes(command)) throw new Error('Unknown crews-omp command');
   if (options.profile && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(options.profile)) throw new Error('Invalid profile name');
   if (options.dryRun && !['migrate', 'uninstall', 'rollback', 'storage'].includes(command)) throw new Error('--dry-run is supported by migrate, uninstall, rollback and storage cleanup');
-  const result = ['recipes','automation','recover','account'].includes(command) ? adaptiveCommand(command,action) : command === 'combo' ? combo(action,changes) : command === 'learning' ? learning(action) : command === 'storage' ? storage(action) : command === 'report' ? routingReport() : main();
+  const result = ['recipes','automation','workflow','recover','account'].includes(command) ? adaptiveCommand(command,action) : command === 'combo' ? combo(action,changes) : command === 'learning' ? learning(action) : command === 'storage' ? storage(action) : command === 'report' ? routingReport() : main();
   console.log(options.json ? JSON.stringify(result) : `${result.status || 'routing_report'}\n${JSON.stringify(result, null, 2)}`);
   if (result.ok === false) process.exitCode = 1;
 } catch (error) {
@@ -213,12 +214,16 @@ function adaptiveCommand(command,operation){
  if(!request||typeof request!=='object'||Array.isArray(request))throw Error('Request JSON object required');
  if(command==='automation'&&!['enable','disable','export','import','grant','revoke','status'].includes(operation))throw Error('Automation operation must be enable/disable/export/import/status');
  if(['recipes','automation'].includes(command))request.operation=operation;
- const readOnly=!options.yes&&(command==='recipes'&&['lookup','status','report'].includes(operation)||command==='automation'&&['status','export'].includes(operation));
+ if(command==='workflow'){
+  if(!['prepare','status','next','recheck','recover','attempts','evaluation'].includes(operation))throw Error('Workflow operation invalid');
+  request.operation=['prepare','status','next','recheck','recover'].includes(operation)?'workflow_'+operation:operation;
+ }
+ const readOnly=!options.yes&&(command==='recipes'&&['lookup','status','report'].includes(operation)||command==='automation'&&['status','export'].includes(operation)||command==='workflow'&&['status','attempts','evaluation'].includes(operation));
  if(!readOnly&&!options.yes)throw Error('Adaptive mutation requires --yes');
  request.confirmed=options.yes===true;
  const loc=locations(),python=readJSON(loc.runtime).python||options.python;
  if(!python)throw Error('Provision isolated runtime before adaptive commands');
- const input=command==='recipes'?{op:'recipes',args:request,project:path.resolve(options.project)}:['account','automation'].includes(command)?{op:command,request,project:path.resolve(options.project)}:{...request,op:'recover',project:path.resolve(options.project)};
+ const input=command==='recipes'?{op:'recipes',args:request,project:path.resolve(options.project)}:['account','automation','workflow'].includes(command)?{op:command,request,project:path.resolve(options.project)}:{...request,op:'recover',project:path.resolve(options.project)};
  const result=spawnSync(python,[path.join(root,'omp_bridge.py')],{input:JSON.stringify(input),encoding:'utf8',shell:false,windowsHide:true,maxBuffer:1024*1024,env:{...process.env,CREWS_OMP_HOME:loc.state,PYTHONUTF8:'1'}});
  let value;try{value=JSON.parse(result.stdout);}catch{throw Error('Adaptive backend invalid response');}
  if(result.status!==0||value.error)throw Error(value.error||'Adaptive backend failed');

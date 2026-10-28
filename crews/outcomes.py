@@ -18,11 +18,28 @@ def digest(value):
 
 def fingerprints(project, paths):
     root=Path(project).resolve();result={}
+    def fingerprint(path, ancestors=frozenset()):
+        try:resolved=path.resolve()
+        except (OSError,RuntimeError) as exc:raise ValueError('evidence link cycle') from exc
+        if not resolved.is_relative_to(root):raise ValueError('evidence path escapes project via link')
+        link=os.readlink(path) if path.is_symlink() else None
+        if resolved.is_dir():
+            if resolved in ancestors:raise ValueError('evidence link cycle')
+            children=[]
+            for child in sorted(path.iterdir(),key=lambda item:item.name):
+                kind='link' if child.is_symlink() else 'directory' if child.is_dir() else 'file'
+                children.append([child.name,kind,fingerprint(child,ancestors|{resolved})])
+            value='directory:'+digest(children)
+        elif resolved.is_file():
+            with resolved.open('rb') as source:value=hashlib.file_digest(source,'sha256').hexdigest()
+        elif not resolved.exists():value=None
+        else:raise ValueError('unsupported evidence file type')
+        return digest(['link',link,value]) if link is not None else value
     for name in dict.fromkeys(paths):
-        path=(root/name).resolve()
-        if Path(name).is_absolute() or '..' in Path(name).parts or not path.is_relative_to(root):
-            raise ValueError('evidence path escapes project')
-        result[name]=hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+        if not isinstance(name,str) or not name or ':' in name:raise ValueError('evidence path must be local')
+        path=Path(name.replace('\\','/'))
+        if path.is_absolute() or '..' in path.parts:raise ValueError('evidence path escapes project')
+        result[name]=fingerprint(root/path)
     return result
 
 
@@ -49,7 +66,7 @@ def profile(role, project, roles):
         for name in writer.get('scope') or []:
             target=(root/name).resolve()
             if script==target or script.is_relative_to(target):raise ValueError('checker profile is writable')
-    return {**value,'sha256':hashlib.sha256(script.read_bytes()).hexdigest(),'criteria':list(role.get('criteria') or [])}
+    return {**value,'sha256':fingerprints(project,[value['input']])[value['input']],'criteria':list(role.get('criteria') or [])}
 
 
 def model_proof(cell,result):

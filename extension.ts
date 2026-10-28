@@ -1,3 +1,4 @@
+import {AsyncLocalStorage} from 'node:async_hooks';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -11,7 +12,7 @@ import {editCombos} from './combo-editor.mjs';
 import {classifyAdaptive} from './adaptive-classifier.mjs';
 import {manageLearning} from './learning-editor.mjs';
 import {sessionRoutingReport} from './routing-evidence.mjs';
-import {admittedWrite} from './write-scope.mjs';
+import {admittedWrite,admittedRead} from './write-scope.mjs';
 import {manageRecipes} from './recipe-editor.mjs';
 import {manageRules} from './rule-editor.mjs';
 const base=path.dirname(fileURLToPath(import.meta.url));
@@ -23,7 +24,8 @@ function requireRuntime(){
 }
 function bridge(input:any){return callBridge(requireRuntime(),base,input);}
 export default function(pi:any){
- const z=pi.zod;let active:any=null,child:any=null,wireOK=false,conflict=false;
+ const z=pi.zod;let child:any=null,wireOK=false,conflict=false;
+ const dispatches=new Map<string,any>();const dispatchContext=new AsyncLocalStorage<any>();
  const recovery=createPlanRecovery();let mainReceipt=false;
  let classifierRequest=false;
  let automationDraining=false;
@@ -79,9 +81,10 @@ export default function(pi:any){
  pi.on('before_subagent_spawn',(event:any,ctx:any)=>{
   if(isChild(ctx)&&ctx.agent.name?.startsWith('crew-'))return {block:true,reason:'Crew depth is one'};
   if(!event.agent?.startsWith('crew-')){
-   if(active)return {block:true,reason:'Active crew requires planned seats'};
+   if(dispatches.size)return {block:true,reason:'Active crew requires planned seats'};
    return;
   }
+  const active=dispatchContext.getStore();
   if(conflict||!active||event.agent!==active.call.agent_type)return {block:true,reason:'Crew spawn requires current native admission'};
   if(event.invocationKind&&event.invocationKind!=='task')return {block:true,reason:'Crews uses the native task path only'};
   if(active.spawnUsed)return {block:true,reason:'Admission already consumed for one child'};
@@ -109,13 +112,13 @@ export default function(pi:any){
     const reason=recovery.blockReason();if(reason)return {block:true,reason};
    }
   }
-  if(!isChild(ctx)&&active&&['eval','workpool','vibe','clone','task'].includes(event.toolName))return {block:true,reason:'A crew dispatch is already running'};
+  if(!isChild(ctx)&&dispatches.size>=2&&['eval','workpool','vibe','clone','task'].includes(event.toolName))return {block:true,reason:'Two crew dispatches already running'};
   if(!isChild(ctx)||!ctx.agent.name?.startsWith('crew-'))return;
   if(!child||!wireOK)return {block:true,reason:'Crew admission/wire verification missing'};
   try{bridge({op:'ticket',token:child.token,project:ctx.cwd});}catch{return {block:true,reason:'Crew admission expired/revoked'};}
   const name=event.toolName,input=event.input;
   const reads=['read','grep','glob','find','ls','ast_grep','yield'];
-  if(reads.includes(name))return;
+  if(reads.includes(name)&&(!child.call.workflow_id||name==='yield'||admittedRead(ctx.cwd,input,name,child.call.read_scope)))return;
   if(name==='bash'&&child.call.commands.includes(input.command))return;
   if(['write','edit'].includes(name)&&/^crew-(produce|integrate)-/.test(ctx.agent.name)&&admittedWrite(ctx.cwd,input,name,child.call.write_scope))return;
   return {block:true,reason:'Tool/command/file is outside admitted Crews authority'};
@@ -132,10 +135,12 @@ export default function(pi:any){
  });
  async function dispatchCrew(ref:any,ctx:any,signal?:AbortSignal,update?:any){
   if(!ctx.invokeTool)throw Error('Native task delegation API unavailable; Crews disabled');
-  checkConflict(ctx.cwd);if(isChild(ctx)||active)throw Error('Only idle main session dispatches Crews');
-  active=bridge({op:'dispatch',run:ref.run,role:ref.role,session:ref.session,project:ctx.cwd});
+  checkConflict(ctx.cwd);if(isChild(ctx)||dispatches.size>=2)throw Error('Only main session with available native slot dispatches Crews');
+  const active=bridge({op:'dispatch',run:ref.run,role:ref.role,session:ref.session,project:ctx.cwd});
+  dispatches.set(active.token,active);
   try{
   routeEvidence(ctx,{path:'crew',run:ref.run,role:ref.role,requested_combo:active.call.requested_combo,effective_combo:active.call.policy_combo,bounded_small:active.call.bounded_small,model:active.call.model,effort:active.call.reasoning_effort,classification:active.call.role_answers,reason:active.call.routing_reason});
+   if(active.call.stage||active.call.workflow_stage)ctx.ui?.notify?.(`[ROUTE: ${active.call.policy_combo} | KEY: ${active.call.role_answers.need} | STAGE: ${active.call.stage??active.call.workflow_stage} | TASK: ${active.call.role_id}]`,'info');
    const projectAgent=path.join(ctx.cwd,'.omp/agents',active.call.agent_type+'.md');
    const managedAgent=path.join(base,'agents',active.call.agent_type+'.md');
    for(const override of [projectAgent,path.join(settings.agentDir,'agents',active.call.agent_type+'.md')])if(fs.existsSync(override)&&fs.readFileSync(override,'utf8')!==fs.readFileSync(managedAgent,'utf8'))throw Error('Project/user shadows managed crew agent; review configuration');
@@ -143,7 +148,8 @@ export default function(pi:any){
    const criterionSchema={type:'array',items:{type:'object',properties:{criterion:{type:'string'},status:{type:'string',enum:['pass','fail']}},required:['criterion','status'],additionalProperties:false}};
    const outputSchema:any={type:'object',properties:{status:{type:'string',enum:['COMPLETE','PARTIAL','BLOCKED','FAILED']},verification:{type:'array',items:{type:'string'}},criterion_results:criterionSchema},required:active.call.checker_profile?['status','verification','criterion_results']:['status','verification']};
    if(active.call.automation_governance){outputSchema.properties.policy_decision=bridge({op:'automation_schema'});outputSchema.required.push('policy_decision');}
-   const result=await ctx.invokeTool({context:`Independent role; use only its brief. [crew-ticket:${active.token}]`,tasks:[{agent:active.call.agent_type,task:active.call.prompt,solutionSpace:'Execute explicit role authority. Finite bash uses only command; omit service name, ready, async and timeout fields. Model/effort from admission.',outputSchema,schemaMode:'strict'}]},{signal,onUpdate:update});
+   if(active.call.context_request){outputSchema.properties.context_packet=bridge({op:'context_schema'});outputSchema.required.push('context_packet');}
+   const result=await dispatchContext.run(active,()=>ctx.invokeTool({context:`Independent role; use only its brief. [crew-ticket:${active.token}]`,tasks:[{agent:active.call.agent_type,task:active.call.prompt,solutionSpace:'Execute explicit role authority. Model/effort from admission.',outputSchema,schemaMode:'strict'}]},{signal,onUpdate:update}));
    const rows=result.details?.results;
    const row=rows?.[0];const proof=bridge({op:'receipt',token:active.token,project:ctx.cwd});
    let payload=row?.structuredOutput?.data;
@@ -155,14 +161,14 @@ export default function(pi:any){
    const profileOk=!active.call.checker_profile||(hostVerification?.receipt?.exit_code===0&&Array.isArray(hostCriteria)&&hostCriteria.length===active.call.checker_profile.criteria.length&&hostCriteria.every((r:any,i:number)=>r.criterion===active.call.checker_profile.criteria[i]&&r.status==='pass'));
    const good=verifiedCompletion(row,payload,proof,active.call)&&profileOk;
    const durationMs=performance.now()-started;
-   bridge({op:'record',run:ref.run,role:ref.role,session:ref.session,host_key:active.host_key,project:ctx.cwd,result:{status:good?'COMPLETE':'FAILED',producer_claim:payload?.status??null,policy_decision:active.call.automation_governance?payload?.policy_decision:null,criterion_results:hostCriteria??null,tool_receipts:toolReceipts,host_verification:hostVerification,failure_kind:row?.aborted?'cancelled':row?.error?'provider_error':!payload?'schema_error':toolReceipts.some((r:any)=>r.error)?'tool_error':good?null:'task_failed',verification:payload?.verification||['Native result incomplete or missing verified structured evidence'],native:{exitCode:row?.exitCode,resolvedModel:row?.resolvedModel,resolvedThinkingLevel:row?.resolvedThinkingLevel,usage:row?.usage,durationMs},wire:proof}});
+   bridge({op:'record',run:ref.run,role:ref.role,session:ref.session,host_key:active.host_key,project:ctx.cwd,result:{status:good?'COMPLETE':'FAILED',producer_claim:payload?.status??null,context_packet:payload?.context_packet??null,policy_decision:active.call.automation_governance?payload?.policy_decision:null,criterion_results:hostCriteria??payload?.criterion_results??null,tool_receipts:toolReceipts,host_verification:hostVerification,failure_kind:row?.aborted?'cancelled':row?.error?'provider_error':!payload?'schema_error':toolReceipts.some((r:any)=>r.error)?'tool_error':good?null:'task_failed',verification:payload?.verification||['Native result incomplete or missing verified structured evidence'],native:{exitCode:row?.exitCode,resolvedModel:row?.resolvedModel,resolvedThinkingLevel:row?.resolvedThinkingLevel,usage:row?.usage,durationMs},wire:proof}});
    if(automationDraining&&!good)automationNotice(ctx,'failed',{run:ref.run,role:ref.role,reason:'Native review failed verified completion'});
    routeEvidence(ctx,{path:'crew-result',run:ref.run,role:ref.role,effective_combo:active.call.policy_combo,bounded_small:active.call.bounded_small,status:good?'COMPLETE':'FAILED',native:{model:row?.resolvedModel,effort:row?.resolvedThinkingLevel,exitCode:row?.exitCode,usage:row?.usage,durationMs},wire:proof});
    return result;
   }catch(err){
    try{bridge({op:'record',run:ref.run,role:ref.role,session:ref.session,host_key:active.host_key,project:ctx.cwd,result:{status:'FAILED',failure_kind:signal?.aborted?'cancelled':'dispatch_error',verification:['Dispatch cancelled or failed; retry requires explicit repair']}});}catch{}
    throw err;
-  }finally{active=null;}
+  }finally{dispatches.delete(active.token);}
  }
  function automationNotice(ctx:any,status:string,detail:any){
   const message='Crews automation '+status+': '+JSON.stringify(detail);
@@ -170,7 +176,7 @@ export default function(pi:any){
   try{pi.sendMessage({customType:'crews-automation',content:message,display:true},{triggerTurn:false});}catch{try{ctx.ui?.notify(message,'error');}catch{}}
  }
  async function drainAutomation(ctx:any,signal?:AbortSignal,update?:any){
-  if(isChild(ctx)||active||automationDraining)return;
+  if(isChild(ctx)||dispatches.size||automationDraining)return;
   automationDraining=true;
   try{
    checkConflict(ctx.cwd);
@@ -194,13 +200,13 @@ export default function(pi:any){
   if(!ctx.invokeTool)throw Error('Native task delegation API unavailable; Crews disabled');
   if(p.automation){
    if(Object.keys(p).some(key=>key!=='automation'))throw Error('automation cannot combine with task selectors');
-   if(isChild(ctx)||active)throw Error('Only idle main host drains automation');
+   if(isChild(ctx)||dispatches.size)throw Error('Only idle main host drains automation');
    await drainAutomation(ctx,signal,update);
    const value=bridge({op:'automation',request:{operation:'status'},project:ctx.cwd});
    return {content:[{type:'text',text:JSON.stringify(value)}],details:value};
   }
   if(p.intake){
-   checkConflict(ctx.cwd);if(isChild(ctx)||active)throw Error('Only idle main session may create a crew intake');
+   checkConflict(ctx.cwd);if(isChild(ctx)||dispatches.size)throw Error('Only idle main session may create a crew intake');
    if(p.crew||p.tasks||p.agent||p.task||p.model)throw Error('Intake cannot be combined with native selectors or existing crew reference');
    recovery.begin(_id);
    try{

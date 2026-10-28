@@ -12,3 +12,9 @@ backups/
 .env
 .env.*
 !.env.example
+pip/
+benchmark-results/
+*-native.jsonl
+operator-public.pem
+*-launch.json
+*-terminal.json

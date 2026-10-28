@@ -7,6 +7,9 @@ from crews.outcomes import fingerprints,digest
 def dispatch(request,project,state=None):
  from crews import omp_adapter as a
  if not isinstance(request,dict):raise ValueError('runner request required')
+ if 'workflow' in request or request.get('operation') in ('workflow_prepare','workflow_status','workflow_next','workflow_recheck','workflow_recover'):
+  from crews.workflow import dispatch as workflow_dispatch
+  return workflow_dispatch(request,project,state)
  project=a.canonical(project);slot=request.get('slot');op=request.get('operation')
  if not isinstance(slot,str) or not slot or len(slot)>120 or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for c in slot):raise ValueError('runner slot must be bounded identifier')
  root=Path(state or a.home());manifest=root/'runner'/ (slot+'.json')

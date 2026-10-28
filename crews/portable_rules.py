@@ -33,12 +33,15 @@ def parse(value):
 
 def revision(db,project,kind,target):
     from crews import recipes
+    from crews.classification import policy_version
+    from pathlib import Path
+    contract=dict(routing=policy_version(),workflow=outcomes.digest((Path(__file__).with_name('workflow.py')).read_text(encoding='utf-8')))
     if kind=='policy':
         row=db.execute('SELECT request FROM automation_grants WHERE id=? AND project=? AND revoked=0',(target,project)).fetchone()
         if not row:raise ValueError('rule policy no longer exists')
-        limits=json.loads(row[0]);return outcomes.digest(dict(epoch=limits['epoch'],installation=limits['installation_id'],policy={key:limits[key] for key in governance.DEFAULTS}))
+        limits=json.loads(row[0]);return outcomes.digest(dict(epoch=limits['epoch'],installation=limits['installation_id'],policy={key:limits[key] for key in governance.DEFAULTS},sdlc_contract=contract))
     row=recipes._row(db,project,target)
-    return outcomes.digest(dict(body=json.loads(row['body']),profile_hash=row['profile_hash']))
+    return outcomes.digest(dict(body=json.loads(row['body']),profile_hash=row['profile_hash'],sdlc_contract=contract))
 
 
 def validate_job(db,request,project):
@@ -78,6 +81,7 @@ def exchange(request,project,state):
                 context=copy.deepcopy(context);context['recipe']={key:body[key] for key in context['recipe']};context['recipe']['version']=body['version']+1
             else:raise ValueError('rule kind must be policy or recipe')
             packet=dict(format='crews-rule',version=1,export_id=uuid.uuid4().hex,kind=kind,base=dict(target=target,revision=revision(db,project,kind,target)),instructions=description,schema=schema,proposal=proposal)
+            packet['workflow_contract']=dict(version=1,profiles=['baseline','sdlc_cost_aware'],default='baseline',authority='immutable original scope',promotion='operator-approved frozen independent evidence only')
             if kind=='recipe':packet['constraints']={key:body[key] for key in ('features','applicability','exclusions','max_difficulty')}
             db.execute('INSERT INTO rule_exports VALUES(?,?,?,?,?)',(packet['export_id'],project,json.dumps(packet),json.dumps(context),time.time()))
             return packet

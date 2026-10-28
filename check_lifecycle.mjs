@@ -45,6 +45,7 @@ try{
  let out='',err='';child.stdout.on('data',b=>out+=b);child.stderr.on('data',b=>err+=b);
  const exit=await new Promise((resolve,reject)=>{child.on('error',reject);child.on('exit',resolve);});
  assert.equal(exit,0,err+'\n'+out.slice(-1500));
+ if(writing)assert.ok(fs.existsSync(path.join(temp,'answer.json')),err+'\n'+out.slice(-10000));
  if(writing)assert.deepEqual(JSON.parse(fs.readFileSync(path.join(temp,'answer.json'),'utf8')),{value:47});
  const resultScript=`import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom crews import omp_adapter as a\nr=a.results(sys.argv[2],sys.argv[3],'local-scripted-proof')[0]\nassert r['status']=='completed',r\nassert r['result']['wire']['model']=='code-seek' and r['result']['wire']['effort']=='${writing?'medium':'low'}',r\nprint('verified')`;
  const check=spawnSync(runtime.python,['-c',resultScript,root,ref.run,temp],{env,encoding:'utf8',shell:false});assert.equal(check.status,0,check.stderr+'\n'+out.split('\n').filter(l=>/tool_execution_end|error|extension/i.test(l)).join('\n').slice(-10000)+'\n'+err);

@@ -267,6 +267,7 @@ def _plan(root, db, retention, now, learning=None):
                for cell in _cells(plan)):
             protected[run] = 'learning reference'
         if 'recipe-run:'+run in learning:protected[run]='verified recipe evidence'
+        if any(cell.get('workflow_id') for cell in _cells(plan)):protected[run]='workflow evidence'
         if run not in protected:
             if row['created'] < now - retention['payload_days'] * DAY:
                 archived.append(row)

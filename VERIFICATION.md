@@ -2,6 +2,16 @@
 
 This file records observed release checks, not a guarantee of production task quality or model equivalence. User instructions: [Vietnamese usage guide](docs/usage.vi.md). Executable owners: [governance](crews/governance.py), [automation](crews/automation.py), [portable rules](crews/portable_rules.py), [host adapter](crews/omp_adapter.py).
 
+## 0.11.0 SDLC verification
+
+- Permanent checkout contract suites passed: typed routing27rows/27boundaries, workflow ordering, source scope, two-child correlation, immutable attempts, criterion strikes, successor/partial ownership, two repairs with independent rechecks, dead reservation/orphan recovery, signed quality-only and monetary evidence boundaries.
+- Final package lifecycle11/11passed,0failed/skipped (98.429s). Actual native staged workflow and overlapping Small children passed with scripted provider; focused real-provider scout→writer→host executable checker completed after strict output-envelope correction. Fixture signatures/prices are not provider quality evidence.
+- User explicitly removed monetary/cost acceptance. Signed quality_only keeps quality, per-unit nonregression, host latency, frozen model/policy/environment and original behavior proof; money remains not_evaluated. No savings claim.
+- Main runtime and separate sdlc-canary profile provisioned/linked at0.11.0; doctor ready with all Combo aliases/efforts. Main model/Combo policy unchanged; state preserved. Canary real native startup returned CANARY_READY, exit0. Startup with --no-tools correctly lacked delegation API; a broader earlier startup timed out. Restart OMP/MCP to load new extension.
+- Reconstructed32-unit corpus/64canonical manifests oracle-validated. V4 real-provider evaluation stopped at an arm boundary after confirmed regression and independent oracle findings:12terminal arms, baseline6accepted/candidate5accepted, quality/latency NO_GO; unstarted pairs remain missing. Candidate transform-csv checker lacked strict output (schema_error); never counted pass despite host artifact behavior. No broad default promotion; installed code keeps baseline default and SDLC opt-in.
+- Earlier provider failures retained, not replayed/relabelled. Oracle audit found incidental top-k AST restriction and unobservable lock requirement: final corpus uses tracemalloc retention boundary and concurrent integer snapshots. Counterexample smoke rejects full materialization and accepts bounded heap with sorted(heap); final32unit validation passes. Revised corpus is not retroactively applied to frozen V4 results. No production-equivalence or monetary claim.
+- Directory symlink OS case skipped where Windows privilege unavailable. Existing pydantic-settings lifespan warning remains. No credentials, state databases, provider logs or ephemeral signing keys belong in Git.
+
 ## 0.10.0 release evidence
 
 Recorded on Windows with Python 3.12, Node.js 24 and OMP native task support:

@@ -99,6 +99,7 @@ def run():
         reject(lambda:a.ticket(ticket['token'],folder,folder))
         reject(lambda:a.dispatch(ref['run'],ref['role'],folder,ref['session'],folder))
         assert not auto.dispatch(dict(operation='status'),folder,folder)['enabled']
+        a.record(ref['run'],ref['role'],dict(status='FAILED',failure_kind='cancelled',verification=['Revoked host review terminated']),folder,ref['session'],folder,host_key=ticket['host_key'])
         source(7)
         row=recipes.dispatch(dict(operation='status'),folder,folder)['recipes'][0]
         assert row['train']+row['holdout']==70,row

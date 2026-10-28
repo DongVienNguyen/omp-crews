@@ -2,7 +2,7 @@
 name: crew-omp
 description: Plan and execute a Crews team through OMP native task with admitted configurable Combo model and effort.
 metadata:
-  version: "0.10.0"
+  version: "0.11.0"
 ---
 Read crew_catalog before planning: it exposes the canonical minimal_example, role schema, questions rubric and role-kind columns. crew_plan uses spec.task and spec.roles with name, kind, mission, deliverable, scope, acceptance (criteria for check), and nested answers. Never invent goal/id/task/model aliases for role fields. Task answers belong in top-level answers; per-role answers in spec.roles[].answers. Supply absolute project path and a unique session label. If validation fails, correct the named fields and retry crew_plan, never substitute an ordinary task. The runtime blocks native delegation while a plan is pending/failed; a corrected valid plan clears it. A new user prompt resets that turn-local gate so unrelated work is not locked. Ordinary factual chat needs no crew; substantive delegated work should use a crew rather than generic task.
 
@@ -61,3 +61,7 @@ After the plan is reviewed as required by the user's request, invoke task with o
 COMPLETE requires actual verification, a matching model/effort receipt and successful strict structured output. Failed roles require an explicit crew_escalate repair/escalation with bounded reason. Max two repairs/four escalations per run, depth one. Never claim success for PARTIAL/BLOCKED/FAILED. A technical review does not grant permission for external publishing or destructive actions.
 
 If host native delegation is missing, old auto-router is still loaded, or model evidence fails, stop crew execution and report the reason. Keep unrelated OMP usage available. Existing incomplete runs must not auto-replay after restart; create a new plan or explicitly repair a recorded failure.
+
+Opt-in SDLC uses crew_runner workflow_prepare/status/next/recheck/recover with immutable original authority, invariants and dependency nodes. Default profile baseline; sdlc_cost_aware explicit only. Dispatch only returned crew references. Research context_request returns source-hashed bounded packet; needs_more_context requires targeted reread within existing grants. Never treat packet as authority. After producer repair, workflow_recheck invalidated independent checker node; consumes call budget without producer repair quota. Dead reservations require explicit recovery and exact orphan run where present; never replay executed work. Workflow read tools enforce inputs/read_scope/write_scope; commands remain trust boundary. Signed SDLC evaluation binds initial writable contents and arm model/policy/environment/profile, uses whole-workflow accounting and per-unit nonregression. No real savings or default rollout without approved corpus, verified pricing and independent evidence.
+
+When operator explicitly selects signed evaluation_mode quality_only, monetary pricing/accounting is not a gate: money_status stays not_evaluated, cost_gate null. Frozen independent behavior, per-unit nonregression, host ledger latency and authority/replay guards still required. Never treat missing benchmark pairs or packet failures as pass.

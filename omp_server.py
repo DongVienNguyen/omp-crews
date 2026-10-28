@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, 
 from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
 from mcp.server.fastmcp import FastMCP
 from crews import omp_adapter as a,catalog
-from crews.classification import ClassificationFacts, RUBRIC, policy_version, safety_errors
+from crews.classification import ClassificationFacts, HOST_FIELDS, RoleMetadata, RUBRIC, policy_version, safety_errors
 
 Need = Literal[tuple(catalog.load()['needs'])]
 Unit = Annotated[float, Field(strict=True, ge=0, le=1)]
@@ -55,7 +55,7 @@ class CheckerProfile(BoundedCheck):
  version: Text
 
 
-class RoleSpec(BaseModel):
+class RoleSpec(RoleMetadata):
  """Canonical role identity and classification; upstream validates execution constraints."""
  model_config = ConfigDict(extra='allow')
  name: Annotated[str, Field(pattern=r'^[a-z0-9]+(-[a-z0-9]+)*$')]
@@ -65,6 +65,7 @@ class RoleSpec(BaseModel):
  answers: RoleAnswers
  solution_space: Text | None = None
  facts: ClassificationFacts | None = None
+ context_request: StrictBool = False
  bounded_check: BoundedCheck | None = None
  routine_check: Annotated[str, Field(pattern=r'^[a-z0-9]+(-[a-z0-9]+)*$')] | None = None
  checker_profile: CheckerProfile | None = None
@@ -91,6 +92,13 @@ class RoleSpec(BaseModel):
  professional_frame: dict | None = None
  slices: list[dict] = Field(default_factory=list)
 
+ @model_validator(mode='before')
+ @classmethod
+ def reject_host_authority(cls, value):
+  if isinstance(value, dict) and HOST_FIELDS.intersection(value):
+   raise ValueError('reserved host authority fields: ' + ', '.join(sorted(HOST_FIELDS.intersection(value))))
+  return value
+
  @model_validator(mode='after')
  def validate_safety(self):
   errors=safety_errors(self.model_dump(exclude_unset=True))
@@ -105,6 +113,13 @@ class PlanSpec(BaseModel):
  model_config = ConfigDict(extra='allow')
  task: Text
  roles: Annotated[list[RoleSpec], Field(min_length=1)]
+
+ @model_validator(mode='before')
+ @classmethod
+ def reject_host_authority(cls, value):
+  if isinstance(value, dict) and HOST_FIELDS.intersection(value):
+   raise ValueError('reserved host authority fields: ' + ', '.join(sorted(HOST_FIELDS.intersection(value))))
+  return value
 
 
 class PlanArguments(ArgModelBase):
@@ -262,7 +277,7 @@ def crew_evaluate(request:dict,project:str)->dict:
 
 @mcp.tool()
 def crew_runner(request:dict,project:str)->dict:
- from crews.runner import dispatch
+ from crews.sdlc_api import dispatch
  return dispatch(request,project,a.home())
 
 @mcp.tool()

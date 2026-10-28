@@ -314,3 +314,15 @@ Migration/rollback là luồng khác; xem [Existing installs](../README.md#exist
 - Auto review có thể tốn token/tiền. Quota review không phải trần USD; provider metadata giá0 không chứng minh miễn phí.
 - Khi OMP đóng, không có dịch vụ nền tự chạy task/gia hạn. Mở lại sẽ tiếp tục theo host state.
 - Không bảo đảm model-equivalence hoặc độ đúng production chỉ từ smoke. [Verification](../VERIFICATION.md) phân biệt kiểm chứng fixture, native thực và giới hạn chưa exercise.
+
+## 14. Workflow SDLC opt-in
+
+Mặc định `baseline`; chỉ chọn `profile:"sdlc_cost_aware"` khi tạo workflow mới. Không đổi main model, Combo hay effort. `stage` chỉ mô tả giai đoạn; `need` mới quyết định route.
+
+CLI: `crews-omp workflow prepare|status|next|recheck|recover|attempts|evaluation --project PATH --request FILE [--yes]`. MCP dùng `crew_runner`. Manifest gồm `task`, `authority:{read,write,commands}`, `invariants`, `max_calls`, `nodes:[{id,stage,depends_on,roles,answers}]`; request có `slot`, `session`. Prepare/next/recheck/recover cần xác nhận. Dispatch từng reference `next` qua `task {crew:...}`; tối đa hai child độc lập, không tự chạy benchmark.
+
+Packet scout tối đa8KiB/32source refs, có hash/line range và unresolved. `needs_more_context` yêu cầu đọc lại nguồn trong scope đã cấp; không biến summary thành authority. Checker không nhận kết luận producer. Workflow kiểm tra read/grep/glob grants và symlink; shell đã cấp vẫn là trusted code, không phải OS sandbox.
+
+Check fail: repair/escalate producer rõ lý do; sau sửa gọi `workflow_recheck` với `node` checker. Recheck tốn call budget nhưng không ăn quota hai lần sửa producer. Hai Medium repair cùng criterion thất bại sẽ chặn Medium tiếp; rename/reorder không xóa lịch sử. Crash reservation dùng `workflow_recover` với node; nếu đã có orphan plan phải chỉ đúng `run`. Owner còn sống hoặc run đã chạy bị từ chối, không replay ngầm.
+
+Evaluation nhận wrapper `request` với operation freeze/evidence/attest/report. Freeze cần chữ ký operator; keyless governance không tự ký evidence. Với `evaluation_mode:"quality_only"`, chỉ kiểm quality và latency từ host ledger, không cần giá hoặc accounting tiền; `money_status:not_evaluated`. Bỏ mode thì giữ monetary gate cũ. Snapshot giữ cả file ban đầu sẽ được sửa, profile/model/policy/environment từng arm. Thiếu corpus/receipt/independent behavior luôn `NO_GO`. Portable export pin revision workflow; sửa proposal không cấp scope hay quyền rollout.

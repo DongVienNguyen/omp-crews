@@ -2,7 +2,8 @@
 import hashlib
 import json
 import math
-from pydantic import BaseModel, ConfigDict, StrictBool
+from typing import Annotated, Literal
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from crews import catalog
 
 
@@ -21,13 +22,46 @@ class ClassificationFacts(BaseModel):
     cross_system: StrictBool | None = None
     concurrency_sensitive: StrictBool | None = None
 
+Stage = Literal['discovery', 'architecture', 'scaffolding', 'implementation', 'verification', 'optimization', 'closure']
+NonemptyText = Annotated[str, Field(strict=True, min_length=1, pattern=r'\S')]
+HOST_FIELDS = frozenset({'workflow_id', 'node_id', 'logical_issue', 'local_policy_snapshot', 'automation_governance'})
+
+
+class RiskFacts(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    security: StrictBool | None = None
+    authorization: StrictBool | None = None
+    payment: StrictBool | None = None
+    data_loss: StrictBool | None = None
+    concurrency: StrictBool | None = None
+    precision: StrictBool | None = None
+    public_contract: StrictBool | None = None
+
+
+class PriorAttempt(BaseModel):
+    """Reference only; host resolves attempt history, never caller authority."""
+    model_config = ConfigDict(extra='forbid')
+    run: NonemptyText
+    role: NonemptyText
+
+
+class RoleMetadata(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    stage: Stage | None = None
+    capability_reason: NonemptyText | None = None
+    risk: RiskFacts | None = None
+    prior_attempt: PriorAttempt | None = None
+
+
+def metadata(role):
+    return RoleMetadata.model_validate({key: role[key] for key in RoleMetadata.model_fields if key in role})
 
 RUBRIC = {
-    'version': 1,
+    'version': 2,
     'precedence': 'valid declared answers; deterministic facts; semantic recommendation; require classification',
     'missing_facts': 'unknown, never false',
     'rules': {
-        'bounded_guard': 'produce everyday_implementation difficulty <=1.5; explicit 1-3 files; true targets_fixed/behavior_fixed/scope_bounded/deterministic_check; false behavior_undecided/unknown_cause/consequential_judgment/cross_system/concurrency_sensitive; existing independent checker outside every writer scope and exact admitted command; missing facts unknown, retain Medium; never relabel repeatable_task',
+        'bounded_guard': 'everyday_implementation retains existing independent-check, bounded-scope and difficulty guards; missing facts unknown, retain Medium; stage is descriptive only; never relabel implementation as repeatable_task',
         'unknown_cause': ['difficult_review', 3],
         'consequential_judgment': ['difficult_review', 3],
         'behavior_undecided': ['everyday_implementation', 1.5],
@@ -36,6 +70,10 @@ RUBRIC = {
         'fixed_edit': ['repeatable_task', 0],
         'bounded_implementation': ['everyday_implementation', 1],
         'information_lookup': ['bounded_retrieval', 1],
+        'specialist': 'intrinsic isolated hard work with capability_reason and difficulty >=2, or referenced serious failed attempt; legacy declared specialist remains valid; classification=true requires reason or history; never fabricate an attempt',
+        'critical_check': 'any true risk on check requires difficult_review difficulty >=2.5 or specialist difficulty >=2; information lookup is not a security verdict',
+        'role_kind': 'mechanical_verification requires check; repeatable_task requires produce or integrate; check and research never write',
+        'stage': 'descriptive SDLC metadata only; never selects tier, grants authority or expands scope',
     },
 }
 
@@ -44,7 +82,7 @@ def policy_version():
     # Hash policy-owning code too: remaps and difficulty boundaries are not all catalog data.
     from pathlib import Path
     root = Path(__file__).resolve().parent
-    sources = ['classification.py', 'omp_adapter.py', 'planner.py', 'budget.py', 'learning.py', 'outcomes.py', 'recipes.py', 'shaping.py', 'approval.py', 'accounting.py', 'evaluation.py', 'runner.py', 'automation.py', 'governance.py', 'portable_rules.py']
+    sources = ['classification.py', 'omp_adapter.py', 'planner.py', 'budget.py', 'learning.py', 'outcomes.py', 'recipes.py', 'shaping.py', 'approval.py', 'accounting.py', 'evaluation.py', 'runner.py', 'automation.py', 'governance.py', 'portable_rules.py', 'workflow.py', 'context_packets.py', 'attempt_ledger.py', 'workflow_evaluation.py']
     from crews.omp_adapter import model_policy
     payload = {'catalog': catalog.load(), 'rubric': RUBRIC, 'model_policy':model_policy(),
                'sources': {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sources}}
@@ -74,10 +112,25 @@ def answer_errors(role, require_complete=True):
 def safety_errors(role):
     """No text inference: untrusted objectives cannot override declared evidence."""
     facts = ClassificationFacts.model_validate({} if role.get('facts') is None else role['facts']).model_dump()
+    details = metadata(role)
     need = (role.get('answers') or {}).get('need')
     difficulty = (role.get('answers') or {}).get('difficulty')
     errors = []
     cheap = {'bounded_retrieval', 'repeatable_task', 'mechanical_verification'}
+    errors += [((key,), 'reserved host authority field') for key in sorted(HOST_FIELDS.intersection(role))]
+    if role.get('kind') in ('check', 'research') and role.get('scope'):
+        errors.append((('scope',), 'check and research roles cannot write'))
+    if need == 'specialist':
+        if role.get('classification') is True and not (details.capability_reason or details.prior_attempt):
+            errors.append((('capability_reason',), 'specialist classification requires intrinsic capability reason or prior_attempt reference'))
+        if details.capability_reason and difficulty is not None and difficulty < 2:
+            errors.append((('answers', 'difficulty'), 'intrinsic specialist requires difficulty >= 2'))
+    if role.get('kind') == 'check' and details.risk and any(value is True for value in details.risk.model_dump().values()):
+        if need is not None and need not in ('difficult_review', 'specialist'):
+            errors.append((('answers', 'need'), 'critical risk check requires difficult_review or specialist'))
+        minimum = 2 if need == 'specialist' else 2.5
+        if difficulty is not None and difficulty < minimum:
+            errors.append((('answers', 'difficulty'), f'critical risk check requires difficulty >= {minimum}'))
     for key in ('unknown_cause', 'consequential_judgment'):
         if facts[key] is True:
             if need is not None and need != 'difficult_review':
@@ -88,11 +141,14 @@ def safety_errors(role):
         errors.append((('answers', 'need'), 'contradicts facts.behavior_undecided=true'))
     if facts['information_only'] is True and role.get('kind') in ('produce', 'integrate'):
         errors.append((('facts', 'information_only'), 'information-only role cannot grant writing kind'))
-    if role.get('facts'):
-        if need == 'mechanical_verification' and role.get('kind') != 'check':
-            errors.append((('answers', 'need'), 'mechanical_verification with facts requires check kind'))
-        if need == 'repeatable_task' and role.get('kind') not in ('produce', 'integrate'):
-            errors.append((('answers', 'need'), 'repeatable_task with facts requires produce or integrate kind'))
+    if need == 'mechanical_verification' and role.get('kind') != 'check':
+        errors.append((('answers', 'need'), 'mechanical_verification requires check kind'))
+    if need == 'repeatable_task':
+        if role.get('kind') not in ('produce', 'integrate'):
+            errors.append((('answers', 'need'), 'repeatable_task requires produce or integrate kind'))
+        for key in ('method_fixed', 'targets_fixed', 'behavior_fixed'):
+            if facts[key] is False:
+                errors.append((('answers', 'need'), f'repeatable_task contradicts facts.{key}=false'))
     return errors
 
 
@@ -110,6 +166,7 @@ def classify_role(role, project=None, roles=None):
     refuse(answer_errors(role, require_complete=False));facts=ClassificationFacts.model_validate({} if role.get('facts') is None else role['facts']).model_dump();refuse(safety_errors(role));answers=dict(role['answers']);declared=answers.get('need') is not None and answers.get('difficulty') is not None;suggestion=None;reason='insufficient deterministic evidence; supply need/difficulty or enable semantic recommendation'
     if declared: reason='valid declared need/difficulty take precedence'
     elif facts['unknown_cause'] is True or facts['consequential_judgment'] is True: suggestion=RUBRIC['rules']['unknown_cause'];reason='unknown cause or consequential judgment requires hard reasoning'
+    elif role['kind'] == 'check' and role.get('risk') and any(value is True for value in metadata(role).risk.model_dump().values()): suggestion=RUBRIC['rules']['consequential_judgment'];reason='critical risk requires independent hard review'
     elif facts['behavior_undecided'] is True: suggestion=RUBRIC['rules']['integration_behavior_undecided' if role['kind']=='integrate' else 'behavior_undecided'];reason='behavior or component seams remain undecided'
     elif role['kind']=='produce':
         from crews.omp_adapter import small_routes

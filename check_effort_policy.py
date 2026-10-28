@@ -47,6 +47,8 @@ def rejects(action, fragment):
 
 
 def role(need, difficulty, kind='research', name='combo-policy-checker'):
+    if need=='repeatable_task' and kind=='research':kind='produce'
+    if need=='mechanical_verification':kind='check'
     return {
         'name': name, 'kind': kind,
         'mission': 'Inspect Combo model and effort policy', 'deliverable': name + '.json',
@@ -92,7 +94,7 @@ def write_policy(state, policy):
 
 def check_auto(state):
     for need, combo in NEED_COMBOS.items():
-        kind = 'check' if need == 'mechanical_verification' else 'research'
+        kind = 'check' if need == 'mechanical_verification' else 'produce' if need=='repeatable_task' else 'research'
         for difficulty, effort in [(0, 'low'), (0.999, 'low'), (1, 'medium'),
                                    (1.999, 'medium'), (2, 'high'), (3, 'high')]:
             _, call = plan(state, need, difficulty, kind)
