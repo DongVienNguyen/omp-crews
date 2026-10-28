@@ -144,13 +144,26 @@ def _learning(root):
                                  isolation_level=None)) as db:
         db.execute('BEGIN')
         try:
-            protected = {row[0] for row in db.execute('''
-                SELECT observation_id FROM labels
-                UNION
-                SELECT o.id FROM observations o JOIN rules r
-                  ON r.project=o.project AND r.signature=o.signature AND r.policy=o.policy
-                WHERE r.state IN ('candidate','shadow_ready','active')
-            ''')}
+            tables=_tables(db)
+            protected=set()
+            if {'labels','observations','rules'}<=tables:
+                protected={row[0] for row in db.execute('''
+                    SELECT observation_id FROM labels
+                    UNION SELECT o.id FROM observations o JOIN rules r
+                    ON r.project=o.project AND r.signature=o.signature AND r.policy=o.policy
+                    WHERE r.state IN ('candidate','shadow_ready','active')
+                ''')}
+            if 'recipe_v1_evidence' in tables:
+                for row in db.execute('SELECT proof FROM recipe_v1_evidence'):
+                    proof=_json(row[0])
+                    if proof.get('run'):protected.add('recipe-run:'+str(proof['run']))
+            if 'recipe_v1_captures' in tables:
+                protected.update('recipe-run:'+str(row[0]) for row in db.execute('SELECT run FROM recipe_v1_captures'))
+            if 'automation_jobs' in tables:
+                for row in db.execute('SELECT run,request FROM automation_jobs'):
+                    if row[0]:protected.add('recipe-run:'+str(row[0]))
+                    request=_json(row[1]);source=request.get('source',request)
+                    if source.get('run'):protected.add('recipe-run:'+str(source['run']))
             yield protected
         finally:
             db.rollback()
@@ -175,6 +188,12 @@ def _summary(plan, calls, attempts):
                 'usage': {k: v for k, v in usage.items() if k in
                           {'input', 'output', 'inputTokens', 'outputTokens', 'cacheRead', 'cacheWrite',
                            'totalTokens', 'total', 'cost'} and _number(v)}}
+        for key in ('requested_combo', 'effective_combo', 'bounded_small', 'small_route', 'small_blockers', 'routing_reason', 'routing_policy_version'):
+            if key in cell:
+                item[key] = cell[key]
+        if result.get('outcome'):
+            item['outcome'] = result['outcome']
+        item['native_model_known'] = bool(native.get('resolvedModel'))
         if _number(native.get('durationMs')):
             item['duration_ms'] = native['durationMs']
         counter = counters.get(role)
@@ -247,6 +266,7 @@ def _plan(root, db, retention, now, learning=None):
         if any(cell.get('classification', {}).get('learning', {}).get('observation_id') in learning
                for cell in _cells(plan)):
             protected[run] = 'learning reference'
+        if 'recipe-run:'+run in learning:protected[run]='verified recipe evidence'
         if run not in protected:
             if row['created'] < now - retention['payload_days'] * DAY:
                 archived.append(row)
@@ -401,6 +421,11 @@ def _cleanup(root, retention, dry_run):
                     for receipt in db.execute('SELECT token,payload FROM receipts').fetchall():
                         if receipt['token'] in tokens or _json(receipt['payload']).get('run') == run:
                             db.execute('DELETE FROM receipts WHERE token=?', (receipt['token'],))
+                for token in tokens:
+                    for table in ('tool_receipts','profile_receipts'):
+                        if table in plan['tables']:db.execute('DELETE FROM '+table+' WHERE token=?',(token,))
+                for table in ('dispatch_secrets','run_accounting'):
+                    if table in plan['tables']:db.execute('DELETE FROM '+table+' WHERE run=?',(run,))
                 for table in ('calls', 'attempts', 'tickets', 'admissions'):
                     if table in plan['tables']:
                         db.execute('DELETE FROM ' + table + ' WHERE run=?', (run,))

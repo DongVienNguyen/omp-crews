@@ -301,6 +301,10 @@ test('real venv setup, repeat, relocate, doctor, migration rollback, uninstall a
     const models=Buffer.from(modelYaml);
     const setup=cli('setup');
     assert.equal(setup.status,0,JSON.stringify(setup.data));
+    const localPolicy=JSON.parse(fs.readFileSync(path.join(state,'automation-local.json')));
+    assert.equal(localPolicy.enabled,true);
+    assert.ok(!fs.existsSync(path.join(state,'operator-public.pem')),'fresh setup requires no operator signing key');
+    assert.equal(setup.data.automation.identity,localPolicy.identity);
     const runtime=JSON.parse(fs.readFileSync(path.join(state,'runtime.json')));
     assert.ok(runtime.python.startsWith(path.join(state,'venvs')));
     const isolated=execute(runtime.python,['-c','import sys,importlib.metadata as m;assert sys.prefix!=sys.base_prefix;assert m.version("mcp")=="1.27.0";assert m.version("PyYAML")=="6.0.3";assert any(d.metadata["Name"].lower()=="pywin32" for d in m.distributions())==(sys.platform=="win32")'],env);
@@ -312,6 +316,7 @@ test('real venv setup, repeat, relocate, doctor, migration rollback, uninstall a
     const backupCount=fs.readdirSync(path.join(state,'backups')).length;
     assert.equal(cli('setup','--offline').data.status,'unchanged');
     assert.equal(fs.readdirSync(path.join(state,'backups')).length,backupCount);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(state,'automation-local.json'))).identity,localPolicy.identity,'repeat setup preserves local installation authority');
     success(plugin('link',pkg,'--scope','user'));
     success(cli('doctor'));
     const currentMcpPath=path.join(agent,'mcp.json');

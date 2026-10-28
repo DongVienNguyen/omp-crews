@@ -44,7 +44,7 @@ def policy_version():
     # Hash policy-owning code too: remaps and difficulty boundaries are not all catalog data.
     from pathlib import Path
     root = Path(__file__).resolve().parent
-    sources = ['classification.py', 'omp_adapter.py', 'planner.py', 'budget.py', 'learning.py']
+    sources = ['classification.py', 'omp_adapter.py', 'planner.py', 'budget.py', 'learning.py', 'outcomes.py', 'recipes.py', 'shaping.py', 'approval.py', 'accounting.py', 'evaluation.py', 'runner.py', 'automation.py', 'governance.py', 'portable_rules.py']
     from crews.omp_adapter import model_policy
     payload = {'catalog': catalog.load(), 'rubric': RUBRIC, 'model_policy':model_policy(),
                'sources': {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sources}}
@@ -112,9 +112,9 @@ def classify_role(role, project=None, roles=None):
     elif facts['unknown_cause'] is True or facts['consequential_judgment'] is True: suggestion=RUBRIC['rules']['unknown_cause'];reason='unknown cause or consequential judgment requires hard reasoning'
     elif facts['behavior_undecided'] is True: suggestion=RUBRIC['rules']['integration_behavior_undecided' if role['kind']=='integrate' else 'behavior_undecided'];reason='behavior or component seams remain undecided'
     elif role['kind']=='produce':
-        from crews.omp_adapter import bounded_small
+        from crews.omp_adapter import small_routes
         candidate={**role,'answers':{**answers,'need':answers.get('need') or 'everyday_implementation','difficulty':answers.get('difficulty') if answers.get('difficulty') is not None else 1}}
-        if bounded_small(candidate,project,roles): suggestion=RUBRIC['rules']['bounded_implementation'];reason='fixed bounded implementation with independent deterministic check'
+        if small_routes(candidate,project,roles)['small_route']: suggestion=RUBRIC['rules']['bounded_implementation'];reason='fixed implementation with independent check'
         elif not any(facts[key] is not None for key in ('behavior_fixed','scope_bounded','deterministic_check','cross_system','concurrency_sensitive')) and facts['method_fixed'] is True and facts['targets_fixed'] is True and all(facts[key] is False for key in ('behavior_undecided','unknown_cause','consequential_judgment')): suggestion=RUBRIC['rules']['fixed_edit'];reason='fully prescribed edit with no unresolved behavior'
     elif all(facts[key] is False for key in ('behavior_undecided','unknown_cause','consequential_judgment')):
         if role['kind']=='research' and facts['information_only'] is True and facts['targets_fixed'] is True: suggestion=RUBRIC['rules']['information_lookup'];reason='bounded information-only lookup of fixed targets'
@@ -129,4 +129,8 @@ def classify_role(role, project=None, roles=None):
     policy=model_policy();combo_model=policy['combos'];classifier_model=active_policy()['classifier_model'];complete=answers.get('need') is not None and answers.get('difficulty') is not None
     if not complete:return {'answers':None,'reason':reason,'outcome':'requires_classification','tier':None,'policy_version':policy_version(),'classifier_model':classifier_model,'model_policy':combo_model}
     effective={**role,'answers':answers};refuse(answer_errors(effective)+safety_errors(effective));from crews.omp_adapter import preview_seat;seat=preview_seat(effective,project,roles);tier={'Small':'small','Medium':'medium','Large':'large'}[seat['policy_combo']]
-    return {'answers':answers,'reason':reason,'outcome':'declared' if declared else 'deterministic','tier':tier,**seat,'policy_version':policy_version(),'classifier_model':classifier_model,'model_policy':combo_model}
+    warnings=[]
+    if declared and answers['need'] in ('everyday_implementation','difficult_review','integration_architecture') and all(facts[key] is False for key in ('behavior_undecided','unknown_cause','consequential_judgment')):
+        if role['kind']=='research' and facts['information_only'] is True and facts['targets_fixed'] is True:warnings.append('review_declared_need: facts describe bounded information retrieval')
+        if role['kind']=='check' and facts['method_fixed'] is True and facts['targets_fixed'] is True and facts['criterion_fixed'] is True:warnings.append('review_declared_need: facts describe deterministic verification')
+    return {'answers':answers,'reason':reason,'warnings':warnings,'outcome':'declared' if declared else 'deterministic','tier':tier,**seat,'policy_version':policy_version(),'classifier_model':classifier_model,'model_policy':combo_model}

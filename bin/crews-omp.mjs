@@ -27,9 +27,11 @@ try {
     console.log('Usage: crews-omp setup|doctor|combo|learning|migrate|uninstall|rollback [options]\n\nCommands:\n  setup      Provision isolated Python runtime and owned MCP registration\n  doctor     Check native plugin, configured combos, and live MCP handshake\n  combo      Show, set or reset Small, Medium and Large model/effort assignments\n  learning   Inspect and manage project-scoped verified learning\n  migrate    Replace owned legacy discovery after native plugin registration\n  uninstall  Unlink native plugin and remove owned MCP registration; retain state\n  rollback   Restore unchanged migration snapshot and unlink new plugin\n\nOptions:\n  --python PATH          Python 3.12+ executable\n  --agent-dir PATH       Selected OMP agent directory\n  --state-dir PATH       Persistent Crews state directory\n  --profile NAME         Named OMP profile\n  --offline              Install dependencies without package indexes\n  --json                 Machine-readable output\n  --dry-run              Preview migrate, uninstall or rollback\n  --register-plugin      Link native plugin during setup\n  --expected-hashes FILE Ownership hashes for legacy migration\n  --backup DIRECTORY     Migration snapshot for rollback\n\nCombo: combo show|set|reset [--provider ID] [--small-model ID --small-effort Auto|Low|Medium|High] [--medium-model ID --medium-effort Auto|Low|Medium|High] [--large-model ID --large-effort Auto|Low|Medium|High]\nModel changes default to Auto effort when effort is omitted. Combo set imports legacy policy files; reset replaces them with defaults.\n\nLearning (always requires --project PATH):\n  learning status|observations|rules\n  learning label --id OBSERVATION --need NEED --difficulty DIFFICULTY --evidence REFERENCE --split train|holdout --unit-id UNIT --yes\n  learning activate|rollback --id RULE --yes\n  learning purge --yes\n  learning configure --mode off|shadow|on [--yes]\nLabel, activate, rollback and purge require explicit --yes. Mode on also requires --yes. Default mode is shadow; audit interval is fixed at 10. Activation requires 3 train labels, 2 disjoint holdout labels and no conflicts. Setup never enables inference.');
     console.log('\nReport: report --project PATH (read-only crew routing counts and observed native usage; no prompts)\nLearning: learning report|feedback_options --project PATH\nVerified Small feedback: learning feedback --project PATH --run RUN --role ROLE --session SESSION --need NEED --difficulty DIFFICULTY --evidence REFERENCE --split train|holdout --unit-id UNIT --yes');
     console.log('\nStorage: storage status (read-only) | cleanup [--dry-run | --yes] | compact --yes\nStorage commands use selected --state-dir / --profile; cleanup previews by default.');
+    console.log('\nAdaptive: recipes status|lookup|register|evidence|activate|audit|rollback|configure|probe --project PATH [--request JSON_FILE] [--yes]\nRecovery: recover --project PATH --request JSON_FILE --yes (dead admitted dispatch owner only)');
+    console.log('\nAutomation: automation enable|disable|status|export|import --project PATH [--request JSON_FILE] [--yes]\nSetup enables keyless local policy governance. Export JSON to external AI; edit proposal only; import queues Large review, never direct apply.');
     return;
   }
-  const action = ['combo','learning','storage'].includes(command) && args[0] && !args[0].startsWith('--') ? args.shift() : ['learning','storage'].includes(command) ? 'status' : 'show';
+  const action = ['combo','learning','storage','recipes','automation'].includes(command) && args[0] && !args[0].startsWith('--') ? args.shift() : ['learning','storage','recipes','automation'].includes(command) ? 'status' : 'show';
   const comboFlags = ['provider', ...['small','medium','large'].flatMap(name => [`${name}-model`, `${name}-effort`])];
   const changes = {};
   const valueOptions = {'--python':'python','--agent-dir':'agentDir','--state-dir':'state','--profile':'profile','--expected-hashes':'expectedHashes','--backup':'backup'};
@@ -39,16 +41,19 @@ try {
     const arg = args.shift();
     if (Object.hasOwn(switches,arg)) options[switches[arg]] = true;
     else if (Object.hasOwn(valueOptions,arg) && args[0] && !args[0].startsWith('--')) options[valueOptions[arg]] = args.shift();
+    else if (['recipes','automation','recover','account'].includes(command) && arg==='--request' && args[0])options.request=args.shift();
+    else if (['recipes','automation','recover','account'].includes(command) && arg==='--project' && args[0])options.project=args.shift();
+    else if (['recipes','automation','recover','account'].includes(command) && arg==='--yes')options.yes=true;
     else if (command === 'report' && arg === '--project' && args[0] && !args[0].startsWith('--')) options.project = args.shift();
     else if (['learning','storage'].includes(command) && arg === '--yes') options.yes = true;
     else if (command === 'learning' && Object.hasOwn(learningOptions,arg) && args[0] && !args[0].startsWith('--')) options[learningOptions[arg]] = args.shift();
     else if (command === 'combo' && action === 'set' && comboFlags.includes(arg.slice(2)) && arg.startsWith('--') && args[0] && !args[0].startsWith('--')) changes[arg.slice(2)] = args.shift();
     else throw new Error(['learning','storage'].includes(command) ? `Unknown or incomplete ${command} argument` : `Unknown or incomplete argument: ${arg}`);
   }
-  if (!['setup', 'doctor', 'combo', 'learning', 'storage', 'report', 'migrate', 'uninstall', 'rollback'].includes(command)) throw new Error('Usage: crews-omp setup|doctor|combo|learning|storage|report|migrate|uninstall|rollback [options]');
+  if (!['setup', 'doctor', 'combo', 'learning', 'storage', 'report', 'recipes', 'automation', 'recover', 'account', 'migrate', 'uninstall', 'rollback'].includes(command)) throw new Error('Unknown crews-omp command');
   if (options.profile && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(options.profile)) throw new Error('Invalid profile name');
   if (options.dryRun && !['migrate', 'uninstall', 'rollback', 'storage'].includes(command)) throw new Error('--dry-run is supported by migrate, uninstall, rollback and storage cleanup');
-  const result = command === 'combo' ? combo(action,changes) : command === 'learning' ? learning(action) : command === 'storage' ? storage(action) : command === 'report' ? routingReport() : main();
+  const result = ['recipes','automation','recover','account'].includes(command) ? adaptiveCommand(command,action) : command === 'combo' ? combo(action,changes) : command === 'learning' ? learning(action) : command === 'storage' ? storage(action) : command === 'report' ? routingReport() : main();
   console.log(options.json ? JSON.stringify(result) : `${result.status || 'routing_report'}\n${JSON.stringify(result, null, 2)}`);
   if (result.ok === false) process.exitCode = 1;
 } catch (error) {
@@ -201,6 +206,25 @@ print(json.dumps(a.routing_report(sys.argv[2]),separators=(',',':')))`;
   if(result.error || result.status !== 0) throw new Error('Routing report failed; check runtime and project validity');
   try { return JSON.parse(result.stdout); } catch { throw new Error('Routing report backend returned invalid response'); }
 }
+function adaptiveCommand(command,operation){
+ if(!options.project?.trim())throw Error('Adaptive commands require --project PATH');
+ const rawRequest=options.request?fs.readFileSync(path.resolve(options.request),'utf8'):null;
+ const request=command==='automation'&&operation==='import'?{packet:rawRequest}:rawRequest?JSON.parse(rawRequest):{};
+ if(!request||typeof request!=='object'||Array.isArray(request))throw Error('Request JSON object required');
+ if(command==='automation'&&!['enable','disable','export','import','grant','revoke','status'].includes(operation))throw Error('Automation operation must be enable/disable/export/import/status');
+ if(['recipes','automation'].includes(command))request.operation=operation;
+ const readOnly=!options.yes&&(command==='recipes'&&['lookup','status','report'].includes(operation)||command==='automation'&&['status','export'].includes(operation));
+ if(!readOnly&&!options.yes)throw Error('Adaptive mutation requires --yes');
+ request.confirmed=options.yes===true;
+ const loc=locations(),python=readJSON(loc.runtime).python||options.python;
+ if(!python)throw Error('Provision isolated runtime before adaptive commands');
+ const input=command==='recipes'?{op:'recipes',args:request,project:path.resolve(options.project)}:['account','automation'].includes(command)?{op:command,request,project:path.resolve(options.project)}:{...request,op:'recover',project:path.resolve(options.project)};
+ const result=spawnSync(python,[path.join(root,'omp_bridge.py')],{input:JSON.stringify(input),encoding:'utf8',shell:false,windowsHide:true,maxBuffer:1024*1024,env:{...process.env,CREWS_OMP_HOME:loc.state,PYTHONUTF8:'1'}});
+ let value;try{value=JSON.parse(result.stdout);}catch{throw Error('Adaptive backend invalid response');}
+ if(result.status!==0||value.error)throw Error(value.error||'Adaptive backend failed');
+ return command==='automation'&&operation==='export'?value:{ok:true,status:command+'_'+operation,...value};
+}
+
 function learning(operation) {
   if(!['status','observations','rules','report','feedback','feedback_options','label','activate','rollback','purge','configure'].includes(operation)) throw new Error('Usage: crews-omp learning status|report|feedback_options|feedback|label|activate|rollback|purge|configure --project PATH [options]');
   if(!options.project?.trim()) throw new Error('Learning commands require --project PATH');
@@ -461,8 +485,10 @@ function main() {
   mcp.mcpServers ??= {};
   mcp.mcpServers['crews-omp'] = registration(loc);
   const runtime = {schemaVersion:1,owner,python,state:loc.state,agentDir:loc.agentDir,packageRoot:root};
+  const automatic=run(python,['-B','-c','import sys,json;sys.path.insert(0,sys.argv[1]);from crews.automation import install;print(json.dumps(install()))',root],{...process.env,CREWS_OMP_HOME:loc.state,PYTHONUTF8:'1'});
+  const automation=JSON.parse(automatic.stdout);
   const unchanged = isDeepStrictEqual(saved,runtime) && fs.existsSync(loc.mcp) && isDeepStrictEqual(readJSON(loc.mcp),mcp);
-  if(command === 'setup' && unchanged) return {ok:true,status:'unchanged',command,packageRoot:root,state:loc.state,agentDir:loc.agentDir,python,pluginLinked:linked};
+  if(command === 'setup' && unchanged) return {ok:true,status:'unchanged',command,packageRoot:root,state:loc.state,agentDir:loc.agentDir,python,pluginLinked:linked,automation};
   const targets = [loc.runtime,loc.mcp,...(command==='migrate'?[loc.config,...plan.files.map(f=>f.path)]:[])];
   const renderedConfig=command==='migrate' && plan.extensions.length ? yaml(python,loc.config,'remove',plan.extensions) : null;
   const expected=Object.fromEntries(targets.map(file=>[file,fs.existsSync(file)?hash(fs.readFileSync(file)):null]));
@@ -483,7 +509,7 @@ function main() {
       }
     }
   },loc.state,{command,agentDir:loc.agentDir,state:loc.state,expected});
-  return {ok:true,status:command==='migrate'?'migrated':'configured',command,packageRoot:root,state:loc.state,agentDir:loc.agentDir,python,pluginLinked:linked,backup,note:linked?'Restart OMP to load package agents and skills':'Link package with omp plugin link <package-root> --scope user, then restart OMP'};
+  return {ok:true,status:command==='migrate'?'migrated':'configured',command,packageRoot:root,state:loc.state,agentDir:loc.agentDir,python,pluginLinked:linked,automation,backup,note:linked?'Restart OMP to load package agents and skills':'Link package with omp plugin link <package-root> --scope user, then restart OMP'};
 }
 
 if(process.argv[1] && samePath(fileURLToPath(import.meta.url),process.argv[1])) cli();

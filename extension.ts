@@ -12,6 +12,8 @@ import {classifyAdaptive} from './adaptive-classifier.mjs';
 import {manageLearning} from './learning-editor.mjs';
 import {sessionRoutingReport} from './routing-evidence.mjs';
 import {admittedWrite} from './write-scope.mjs';
+import {manageRecipes} from './recipe-editor.mjs';
+import {manageRules} from './rule-editor.mjs';
 const base=path.dirname(fileURLToPath(import.meta.url));
 let settings:any;
 try{settings=resolveRuntime(base);}catch{settings=null;}
@@ -24,6 +26,7 @@ export default function(pi:any){
  const z=pi.zod;let active:any=null,child:any=null,wireOK=false,conflict=false;
  const recovery=createPlanRecovery();let mainReceipt=false;
  let classifierRequest=false;
+ let automationDraining=false;
  const classifier=new Classifier(async(request:any)=>{
   const requestContext=request.context;
   const resolved=requestContext.models.resolve(request.model);
@@ -36,10 +39,10 @@ export default function(pi:any){
    return {text:message.content.filter((p:any)=>p.type==='text').map((p:any)=>p.text).join(''),stopReason:message.stopReason,usage:message.usage};
   }finally{classifierRequest=false;}
  });
- async function classifyRole(role:any,ctx:any,signal?:AbortSignal,preview=false){
+ async function classifyRole(role:any,ctx:any,signal?:AbortSignal,preview=false,roles?:any[]){
   if((role.answers?.need==null||role.answers?.difficulty==null)&&role.classification!==true)throw Error('Automatic classification requires classification:true; otherwise supply need/difficulty');
-  const declared=bridge({op:'classify',role,project:ctx.cwd});
-  const result=await classifyAdaptive({role,project:ctx.cwd,session:ctx.sessionManager.getSessionId(),declared,config:loadClassifierConfig(settings.state,declared.classifier_model),classifier,learning:(args:unknown)=>bridge({op:'learning',args,project:ctx.cwd}),revalidate:(value:unknown)=>bridge({op:'classify',role:value,project:ctx.cwd}),signal,context:ctx,preview});
+  const declared=bridge({op:'classify',role,roles,project:ctx.cwd});
+  const result=await classifyAdaptive({role,project:ctx.cwd,session:ctx.sessionManager.getSessionId(),declared,config:loadClassifierConfig(settings.state,declared.classifier_model),classifier,learning:(args:unknown)=>bridge({op:'learning',args,project:ctx.cwd}),revalidate:(value:unknown)=>bridge({op:'classify',role:value,roles,project:ctx.cwd}),signal,context:ctx,preview});
   routeEvidence(ctx,{path:result.semantic?'classifier':result.outcome==='learned'?'learned-classification':'classification',outcome:result.outcome,shadow_sampled:result.shadow_sampled,observation_id:result.learning?.observation_id,rule_id:result.learning?.rule_id,latencyMs:result.semantic?.latencyMs,cacheHit:result.semantic?.cacheHit,usage:result.semantic?.usage});
   return result;
  }
@@ -59,10 +62,13 @@ export default function(pi:any){
   if(conflict)throw Error('Crews and auto-router cannot run together. Restore or finish migration.');
  }
  pi.on('session_start',(_event:any,ctx:any)=>{recovery.reset();mainReceipt=false;try{checkConflict();}catch{conflict=true;}routeEvidence(ctx,{path:'main',model:ctx.model?.id,provider:ctx.model?.provider});});
- pi.on('before_agent_start',(event:any,ctx:any)=>{
+ pi.on('before_agent_start',async(event:any,ctx:any)=>{
   if(!isChild(ctx)){
    recovery.reset();
-   return {message:{customType:'crews-routing-policy',content:'Crew work: read crew_catalog canonical schema and rubric before planning. Assign each role to Combo Small, Medium or Large using task capability; effort is Low/Medium/High or Auto from role difficulty. Auto: below1 low, below2 medium, otherwise high. Explicit Combo effort wins. Classify each role, not the entire project. Repair failed crew_plan before delegation; ordinary tasks receive no Crews routing. Main chat model stays unchanged.',display:false}};
+   bridge({op:'automation_ensure',project:ctx.cwd});
+   const pending=bridge({op:'automation',request:{operation:'status'},project:ctx.cwd});
+   const resume=pending.enabled&&pending.jobs?.some((job:any)=>['queued','reviewing'].includes(job.state));
+   return {message:{customType:'crews-routing-policy',content:'Crew work: read crew_catalog canonical schema and rubric before planning. Assign each role to Combo Small, Medium or Large using task capability; effort is Low/Medium/High or Auto from role difficulty. Auto: below1 low, below2 medium, otherwise high. Explicit Combo effort wins. Classify each role, not the entire project. Repair failed crew_plan before delegation; ordinary tasks receive no Crews routing. Main chat model stays unchanged.'+(resume?' Operator-authorized automation queue pending. Before other work invoke task with ONLY {automation:true}; host selects frozen jobs and enforces signed authority. Do not create replacement plans or approve requests yourself.':''),display:false}};
   }
   const token=((event.prompt||'')+'\n'+(event.systemPrompt||[]).join('\n')).match(/\[crew-ticket:([a-f0-9]{32})\]/)?.[1];
   if(!ctx.agent.name?.startsWith('crew-'))return;
@@ -115,12 +121,84 @@ export default function(pi:any){
   return {block:true,reason:'Tool/command/file is outside admitted Crews authority'};
  });
  pi.on('tool_result',(event:any,ctx:any)=>{
-  if(isChild(ctx))return;
+  if(isChild(ctx)){
+   if(child&&wireOK&&event.toolName==='bash'&&child.call.commands.includes(event.input?.command)){
+    bridge({op:'store_tool_receipt',token:child.token,project:ctx.cwd,payload:{tool:'bash',command:event.input.command,exit_code:typeof event.details?.exitCode==='number'?event.details.exitCode:null,error:Boolean(event.isError||event.details?.timedOut),tool_call_id:event.toolCallId}});
+   }
+   return;
+  }
   const nested=event.details?.xdev?.inner?.isError;
   recovery.result(event.toolCallId,Boolean(event.isError||nested));
  });
- pi.registerTool({name:'task',label:'Task / Crews dispatch',description:'Native task outside Crews, admitted crew:{run,role,session}, or canonical intake:{spec,answers,session}. Intake roles require complete execution authority and classification:true only to fill unresolved need/difficulty. Never infer scope from task text.',parameters:z.object({crew:z.object({run:z.string(),role:z.string(),session:z.string()}).optional(),intake:z.object({spec:z.any(),answers:z.any(),session:z.string()}).optional(),context:z.string().optional(),tasks:z.array(z.any()).optional(),agent:z.string().optional(),task:z.string().optional(),solutionSpace:z.string().optional()}).passthrough(),async execute(_id:any,p:any,signal:any,update:any,ctx:any){
+ async function dispatchCrew(ref:any,ctx:any,signal?:AbortSignal,update?:any){
   if(!ctx.invokeTool)throw Error('Native task delegation API unavailable; Crews disabled');
+  checkConflict(ctx.cwd);if(isChild(ctx)||active)throw Error('Only idle main session dispatches Crews');
+  active=bridge({op:'dispatch',run:ref.run,role:ref.role,session:ref.session,project:ctx.cwd});
+  try{
+  routeEvidence(ctx,{path:'crew',run:ref.run,role:ref.role,requested_combo:active.call.requested_combo,effective_combo:active.call.policy_combo,bounded_small:active.call.bounded_small,model:active.call.model,effort:active.call.reasoning_effort,classification:active.call.role_answers,reason:active.call.routing_reason});
+   const projectAgent=path.join(ctx.cwd,'.omp/agents',active.call.agent_type+'.md');
+   const managedAgent=path.join(base,'agents',active.call.agent_type+'.md');
+   for(const override of [projectAgent,path.join(settings.agentDir,'agents',active.call.agent_type+'.md')])if(fs.existsSync(override)&&fs.readFileSync(override,'utf8')!==fs.readFileSync(managedAgent,'utf8'))throw Error('Project/user shadows managed crew agent; review configuration');
+   const started=performance.now();
+   const criterionSchema={type:'array',items:{type:'object',properties:{criterion:{type:'string'},status:{type:'string',enum:['pass','fail']}},required:['criterion','status'],additionalProperties:false}};
+   const outputSchema:any={type:'object',properties:{status:{type:'string',enum:['COMPLETE','PARTIAL','BLOCKED','FAILED']},verification:{type:'array',items:{type:'string'}},criterion_results:criterionSchema},required:active.call.checker_profile?['status','verification','criterion_results']:['status','verification']};
+   if(active.call.automation_governance){outputSchema.properties.policy_decision=bridge({op:'automation_schema'});outputSchema.required.push('policy_decision');}
+   const result=await ctx.invokeTool({context:`Independent role; use only its brief. [crew-ticket:${active.token}]`,tasks:[{agent:active.call.agent_type,task:active.call.prompt,solutionSpace:'Execute explicit role authority. Finite bash uses only command; omit service name, ready, async and timeout fields. Model/effort from admission.',outputSchema,schemaMode:'strict'}]},{signal,onUpdate:update});
+   const rows=result.details?.results;
+   const row=rows?.[0];const proof=bridge({op:'receipt',token:active.token,project:ctx.cwd});
+   let payload=row?.structuredOutput?.data;
+   if(!payload){try{payload=JSON.parse(row?.output||'');}catch{}}
+   const hostVerification=active.call.checker_profile?bridge({op:'verify_profile',token:active.token,host_key:active.host_key,project:ctx.cwd}):null;
+   const toolReceipts=bridge({op:'tool_receipts',token:active.token,project:ctx.cwd});
+   const verified=proof?.model===active.call.model&&proof?.effort===active.call.reasoning_effort;
+   const hostCriteria=hostVerification?.receipt?.criterion_results;
+   const profileOk=!active.call.checker_profile||(hostVerification?.receipt?.exit_code===0&&Array.isArray(hostCriteria)&&hostCriteria.length===active.call.checker_profile.criteria.length&&hostCriteria.every((r:any,i:number)=>r.criterion===active.call.checker_profile.criteria[i]&&r.status==='pass'));
+   const good=verifiedCompletion(row,payload,proof,active.call)&&profileOk;
+   const durationMs=performance.now()-started;
+   bridge({op:'record',run:ref.run,role:ref.role,session:ref.session,host_key:active.host_key,project:ctx.cwd,result:{status:good?'COMPLETE':'FAILED',producer_claim:payload?.status??null,policy_decision:active.call.automation_governance?payload?.policy_decision:null,criterion_results:hostCriteria??null,tool_receipts:toolReceipts,host_verification:hostVerification,failure_kind:row?.aborted?'cancelled':row?.error?'provider_error':!payload?'schema_error':toolReceipts.some((r:any)=>r.error)?'tool_error':good?null:'task_failed',verification:payload?.verification||['Native result incomplete or missing verified structured evidence'],native:{exitCode:row?.exitCode,resolvedModel:row?.resolvedModel,resolvedThinkingLevel:row?.resolvedThinkingLevel,usage:row?.usage,durationMs},wire:proof}});
+   if(automationDraining&&!good)automationNotice(ctx,'failed',{run:ref.run,role:ref.role,reason:'Native review failed verified completion'});
+   routeEvidence(ctx,{path:'crew-result',run:ref.run,role:ref.role,effective_combo:active.call.policy_combo,bounded_small:active.call.bounded_small,status:good?'COMPLETE':'FAILED',native:{model:row?.resolvedModel,effort:row?.resolvedThinkingLevel,exitCode:row?.exitCode,usage:row?.usage,durationMs},wire:proof});
+   return result;
+  }catch(err){
+   try{bridge({op:'record',run:ref.run,role:ref.role,session:ref.session,host_key:active.host_key,project:ctx.cwd,result:{status:'FAILED',failure_kind:signal?.aborted?'cancelled':'dispatch_error',verification:['Dispatch cancelled or failed; retry requires explicit repair']}});}catch{}
+   throw err;
+  }finally{active=null;}
+ }
+ function automationNotice(ctx:any,status:string,detail:any){
+  const message='Crews automation '+status+': '+JSON.stringify(detail);
+  try{routeEvidence(ctx,{path:'crew-automation',status,detail});}catch{}
+  try{pi.sendMessage({customType:'crews-automation',content:message,display:true},{triggerTurn:false});}catch{try{ctx.ui?.notify(message,'error');}catch{}}
+ }
+ async function drainAutomation(ctx:any,signal?:AbortSignal,update?:any){
+  if(isChild(ctx)||active||automationDraining)return;
+  automationDraining=true;
+  try{
+   checkConflict(ctx.cwd);
+   if(!ctx.invokeTool)throw Error('Native task delegation API unavailable; automation paused');
+   for(let jobs=0;jobs<8&&!signal?.aborted;jobs++){
+    const ref=bridge({op:'automation_next',project:ctx.cwd});
+    if(!ref)return;
+    if(ref.blocked){automationNotice(ctx,'blocked',ref.blocked);return;}
+    await dispatchCrew(ref,ctx,signal,update);
+    const status=bridge({op:'automation',request:{operation:'status'},project:ctx.cwd});
+    const recorded=status.jobs?.find((job:any)=>job.run===ref.run);
+    if(recorded){
+     const applied=bridge({op:'automation_finish',job_id:recorded.id,project:ctx.cwd});
+     if(applied.state==='blocked'){automationNotice(ctx,'blocked',applied.result);return;}
+    }
+   }
+  }catch(error){automationNotice(ctx,'failed',error instanceof Error?error.message:String(error));}
+  finally{automationDraining=false;}
+ }
+ pi.registerTool({name:'task',label:'Task / Crews dispatch',description:'Native task, admitted crew reference, canonical intake, or automation:true to drain only operator-authorized frozen Large reviews.',parameters:z.object({automation:z.boolean().optional(),crew:z.object({run:z.string(),role:z.string(),session:z.string()}).optional(),intake:z.object({spec:z.any(),answers:z.any(),session:z.string()}).optional(),context:z.string().optional(),tasks:z.array(z.any()).optional(),agent:z.string().optional(),task:z.string().optional(),solutionSpace:z.string().optional()}).passthrough(),async execute(_id:any,p:any,signal:any,update:any,ctx:any){
+  if(!ctx.invokeTool)throw Error('Native task delegation API unavailable; Crews disabled');
+  if(p.automation){
+   if(Object.keys(p).some(key=>key!=='automation'))throw Error('automation cannot combine with task selectors');
+   if(isChild(ctx)||active)throw Error('Only idle main host drains automation');
+   await drainAutomation(ctx,signal,update);
+   const value=bridge({op:'automation',request:{operation:'status'},project:ctx.cwd});
+   return {content:[{type:'text',text:JSON.stringify(value)}],details:value};
+  }
   if(p.intake){
    checkConflict(ctx.cwd);if(isChild(ctx)||active)throw Error('Only idle main session may create a crew intake');
    if(p.crew||p.tasks||p.agent||p.task||p.model)throw Error('Intake cannot be combined with native selectors or existing crew reference');
@@ -134,7 +212,7 @@ export default function(pi:any){
     if(!Object.hasOwn(role,role.kind==='check'?'criteria':'acceptance'))missing.push(role.kind==='check'?'criteria':'acceptance');
     if(role.model||role.agent)throw Error(`intake.spec.roles[${index}] cannot override model/agent`);
     if(missing.length)throw Error(`intake.spec.roles[${index}] missing: ${missing.join(', ')}`);
-    const result=await classifyRole(role,ctx,signal);
+    const result=await classifyRole(role,ctx,signal,false,spec.roles);
     if(!result.answers)throw Error(`intake.spec.roles[${index}] requires_classification: ${result.semantic?.reason??result.reason}`);
     role.declared_answers={...role.answers};
     role.classification_evidence=result;
@@ -143,7 +221,7 @@ export default function(pi:any){
    const plan=bridge({op:'plan',spec,answers:p.intake.answers,project:ctx.cwd,session:p.intake.session});
    recovery.result(_id,false);
    routeEvidence(ctx,{path:'crew-intake',toolCallId:_id,run:plan.run_id,roles:spec.roles.map((r:any)=>({name:r.name,answers:r.answers}))});
-   return {content:[{type:'text',text:JSON.stringify({run:plan.run_id,session:plan.session,waves:plan.waves.map((w:any)=>({kind:w.kind,calls:w.calls.map((c:any)=>({role:c.role_id,model:c.model,effort:c.reasoning_effort,crew:{run:plan.run_id,role:c.role_id,session:plan.session}}))}))})}],details:{plan}};
+   return {content:[{type:'text',text:JSON.stringify({run:plan.run_id,session:plan.session,warnings:spec.roles.flatMap((r:any)=>r.classification_evidence?.warnings??[]),waves:plan.waves.map((w:any)=>({kind:w.kind,calls:w.calls.map((c:any)=>({role:c.role_id,model:c.model,effort:c.reasoning_effort,requested_combo:c.requested_combo,effective_combo:c.effective_combo,small_route:c.small_route,small_blockers:c.small_blockers,crew:{run:plan.run_id,role:c.role_id,session:plan.session}}))}))})}],details:{plan}};
    }catch(error){recovery.result(_id,true);throw error;}
   }
   if(!p.crew){
@@ -154,29 +232,17 @@ export default function(pi:any){
    routeEvidence(ctx,{path:'native-task-result',models:result.details?.results?.map((row:any)=>({model:row.resolvedModel,effort:row.resolvedThinkingLevel,exitCode:row.exitCode})),note:'Native delegation; no Crews plan or remap'});
    return result;
   }
-  checkConflict(ctx.cwd);if(isChild(ctx)||active)throw Error('Only idle main session dispatches Crews');
-  const ref=p.crew;active=bridge({op:'dispatch',run:ref.run,role:ref.role,session:ref.session,project:ctx.cwd});
-  routeEvidence(ctx,{path:'crew',run:ref.run,role:ref.role,requested_combo:active.call.requested_combo,effective_combo:active.call.policy_combo,bounded_small:active.call.bounded_small,model:active.call.model,effort:active.call.reasoning_effort,classification:active.call.role_answers,reason:active.call.routing_reason});
-  try{
-   const projectAgent=path.join(ctx.cwd,'.omp/agents',active.call.agent_type+'.md');
-   const managedAgent=path.join(base,'agents',active.call.agent_type+'.md');
-   for(const override of [projectAgent,path.join(settings.agentDir,'agents',active.call.agent_type+'.md')])if(fs.existsSync(override)&&fs.readFileSync(override,'utf8')!==fs.readFileSync(managedAgent,'utf8'))throw Error('Project/user shadows managed crew agent; review configuration');
-   const started=performance.now();
-   const result=await ctx.invokeTool({context:`Independent role; use only its brief. [crew-ticket:${active.token}]`,tasks:[{agent:active.call.agent_type,task:active.call.prompt,solutionSpace:'Execute the explicit role brief; model and effort come from the admitted plan.',outputSchema:{type:'object',properties:{status:{type:'string',enum:['COMPLETE','PARTIAL','BLOCKED','FAILED']},verification:{type:'array',items:{type:'string'}}},required:['status','verification']},schemaMode:'strict'}]},{signal,onUpdate:update});
-   const rows=result.details?.results;
-   const row=rows?.[0];const proof=bridge({op:'receipt',token:active.token,project:ctx.cwd});
-   let payload=row?.structuredOutput?.data;
-   if(!payload){try{payload=JSON.parse(row?.output||'');}catch{}}
-   const verified=proof?.model===active.call.model&&proof?.effort===active.call.reasoning_effort;
-   const good=verifiedCompletion(row,payload,proof,active.call);
-   const durationMs=performance.now()-started;
-   bridge({op:'record',run:ref.run,role:ref.role,session:ref.session,project:ctx.cwd,result:{status:good?'COMPLETE':'FAILED',failure_kind:row?.aborted?'cancelled':row?.error?'provider_error':good?null:'task_failed',verification:payload?.verification||['Native result incomplete or missing verified structured evidence'],native:{exitCode:row?.exitCode,resolvedModel:row?.resolvedModel,resolvedThinkingLevel:row?.resolvedThinkingLevel,usage:row?.usage,durationMs},wire:proof}});
-   routeEvidence(ctx,{path:'crew-result',run:ref.run,role:ref.role,effective_combo:active.call.policy_combo,bounded_small:active.call.bounded_small,status:good?'COMPLETE':'FAILED',native:{model:row?.resolvedModel,effort:row?.resolvedThinkingLevel,exitCode:row?.exitCode,usage:row?.usage,durationMs},wire:proof});
-   return result;
-  }catch(err){
-   try{bridge({op:'record',run:ref.run,role:ref.role,session:ref.session,project:ctx.cwd,result:{status:'FAILED',failure_kind:signal?.aborted?'cancelled':'dispatch_error',verification:['Dispatch cancelled or failed; retry requires explicit repair']}});}catch{}
-   throw err;
-  }finally{active=null;}
+  try{return await dispatchCrew(p.crew,ctx,signal,update);}
+  finally{await drainAutomation(ctx,signal,update);}
+ }});
+ pi.registerTool({name:'crew_automation',label:'Local Large policy governance',description:'Keyless governance status/enable/disable and portable rule export/import proposals. Imported rules require independent Large review before apply.',parameters:z.object({request:z.object({operation:z.enum(['enable','disable','status','export','import','grant','revoke'])}).passthrough()}),async execute(_id:any,p:any,_signal:any,_update:any,ctx:any){
+  if(isChild(ctx))throw Error('Automation administration belongs to main session');
+  const value=bridge({op:'automation',request:p.request,project:ctx.cwd});
+  return {content:[{type:'text',text:JSON.stringify(value)}],details:value};
+ }});
+ pi.registerTool({name:'crew_recipe_preview',label:'Recipe candidates',description:'Read-only current-project recipe status or candidate lookup; no labels, hits or authority changes.',parameters:z.object({operation:z.enum(['status','report','lookup']),role:z.any().optional(),roles:z.array(z.any()).optional()}),async execute(_id:any,p:any,_signal:any,_update:any,ctx:any){
+  if(isChild(ctx))throw Error('Recipe administration belongs to main session');
+  const value=bridge({op:'recipes',args:p,project:ctx.cwd});return {content:[{type:'text',text:JSON.stringify(value)}],details:value};
  }});
  pi.registerTool({name:'crew_learning',label:'Verified classification learning',description:'Read-only current-project learning status, feedback options, observations, rules or report. Mutations require explicit user CLI or /crew learning confirmation.',parameters:z.object({operation:z.enum(['status','observations','rules','report','feedback_options'])}),async execute(_id:unknown,input:{operation:string},_signal:unknown,_update:unknown,ctx:any){
   if(isChild(ctx))throw Error('Learning administration belongs to main session');
@@ -200,6 +266,14 @@ export default function(pi:any){
  }
  pi.registerCommand('crew',{description:'Crews combos/status/test/history/reload or plan a task',handler:async(args:any,ctx:any)=>{
   const [op,...rest]=args.trim().split(/\s+/);
+  if(op==='rules'){
+   if(!ctx.hasUI){ctx.ui.notify('Use crews-omp automation export/import --project PATH --request FILE','info');return;}
+   try{const value=await manageRules(ctx.ui,(request:any)=>bridge({op:'automation',request,project:ctx.cwd}));ctx.ui.notify(JSON.stringify(value),'info');}catch(error:any){ctx.ui.notify(error.message,'error');}return;
+  }
+  if(op==='recipes'){
+   if(!ctx.hasUI){ctx.ui.notify('Use crews-omp recipes --project PATH --request FILE --yes','info');return;}
+   try{const value=await manageRecipes(ctx.ui,(args:any)=>bridge({op:'recipes',args,project:ctx.cwd}));ctx.ui.notify(JSON.stringify(value),'info');}catch(error:any){ctx.ui.notify(error.message,'error');}return;
+  }
   if(op==='learning'){
    if(!ctx.hasUI){ctx.ui.notify('Use crews-omp learning status|label|activate|rollback in headless mode','error');return;}
    try{await manageLearning(ctx.ui,(args:unknown)=>bridge({op:'learning',args,project:ctx.cwd}));classifier.reload();}catch(error:unknown){ctx.ui.notify(error instanceof Error?error.message:String(error),'error');}

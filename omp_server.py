@@ -51,6 +51,9 @@ class BoundedCheck(BaseModel):
  input: Text
  command: Text
 
+class CheckerProfile(BoundedCheck):
+ version: Text
+
 
 class RoleSpec(BaseModel):
  """Canonical role identity and classification; upstream validates execution constraints."""
@@ -63,6 +66,16 @@ class RoleSpec(BaseModel):
  solution_space: Text | None = None
  facts: ClassificationFacts | None = None
  bounded_check: BoundedCheck | None = None
+ routine_check: Annotated[str, Field(pattern=r'^[a-z0-9]+(-[a-z0-9]+)*$')] | None = None
+ checker_profile: CheckerProfile | None = None
+ verify_targets: list[Text] = Field(default_factory=list)
+ evidence_unit: Text | None = None
+ recipe_features: dict[str,Text] | None = None
+ recipe_profile: BoundedCheck | None = None
+ model_revision: Text | None = None
+ recipe_confirmed: StrictBool = False
+ recipe_approval: dict | None = None
+ recipe_id: Text | None = None
  scope: list[Text] = Field(default_factory=list)
  commands: list[Text] = Field(default_factory=list)
  authority: list[Text] | None = None
@@ -175,6 +188,7 @@ def crew_catalog()->dict:
  policy=a.model_policy()
  classification_policy={'rubric':RUBRIC,'facts_schema':ClassificationFacts.model_json_schema(),'auto_intake_schema':IntakePlanArguments.model_json_schema()}
  classification_policy['bounded_implementation']=a.BOUNDED_ROUTE
+ classification_policy['routine_implementation']={**a.BOUNDED_ROUTE,'max_difficulty':1,'true_facts':[key for key in a.BOUNDED_ROUTE['true_facts'] if key!='deterministic_check'],'check':'routine_check names an independent read-only check role, carrying original acceptance and artifact inputs, dispatched in a later wave; executable checker inputs outside every writer scope'}
  return {'combos':policy['combos'],'model_policy':policy,'classifier_model':a.policy()['classifier_model'],'policy_version':policy_version(),'classification_policy':classification_policy,'combo_effort_options':['Low','Medium','High','Auto'],'effort_policy':{'auto':'difficulty: [0,1) low; [1,2) medium; [2,3] high','selection':{'Small':['mechanical_verification','repeatable_task','bounded_retrieval'],'Medium':['everyday_implementation','long_running_agentic'],'Large':['difficult_review','integration_architecture','specialist']}},'needs':list(cat['needs']),'questions':cat['questions'],'kind_columns':{kind:details['column'] for kind,details in cat['kinds'].items()},'thresholds':cat['thresholds'],'minimal_example':minimal_example(),'guard':'native wrapper plus extension checks; not OS sandbox','concurrency':2,'depth':1}
 
 
@@ -211,5 +225,50 @@ def crew_history(project:str,limit:Annotated[int,Field(strict=True,ge=1,le=200)]
 def crew_routing_report(project:str)->dict:
  """Read-only project routing counts and native usage; no prompts or commands."""
  return a.routing_report(project)
+
+@mcp.tool()
+def crew_recover(run:str,role:str,project:str,session:str,reason:Text,confirmed:StrictBool=False)->dict:
+ """Explicitly reconcile a dead dispatch owner; never claim completion or replay."""
+ return a.recover(run,role,project,session,reason,confirmed)
+
+@mcp.tool()
+def crew_recipes(request:dict,project:str)->dict:
+ """Recipe candidates, verified evidence and explicit consented lifecycle."""
+ from crews.recipes import dispatch
+ return dispatch(request,project)
+
+@mcp.tool()
+def crew_automation(request:dict,project:str)->dict:
+ """Keyless local automation status/enable/disable; policy changes require independent Large host-verified review."""
+ from crews.automation import dispatch
+ return dispatch(request,project)
+
+@mcp.tool()
+def crew_shape(request:dict,project:str)->dict:
+ """Validate caller-scoped role proposal; never admit or invent authority."""
+ from crews.shaping import propose
+ return propose(request,project)
+
+@mcp.tool()
+def crew_account(request:dict,project:str)->dict:
+ """Record operator-signed complete run accounting; never infer unknown prices."""
+ from crews.accounting import attest
+ return attest(request,project,a.home())
+
+@mcp.tool()
+def crew_evaluate(request:dict,project:str)->dict:
+ from crews.evaluation import dispatch
+ return dispatch(request,project,a.home())
+
+@mcp.tool()
+def crew_runner(request:dict,project:str)->dict:
+ from crews.runner import dispatch
+ return dispatch(request,project,a.home())
+
+@mcp.tool()
+def crew_storage(request:dict)->dict:
+ from crews.storage import dispatch
+ if (request.get('operation')=='compact' or request.get('operation')=='cleanup' and request.get('dry_run') is False) and request.get('confirmed') is not True:raise ValueError('storage mutation requires explicit confirmation')
+ return dispatch({k:v for k,v in request.items() if k!='confirmed'},a.home())
 
 if __name__=='__main__':mcp.run(transport='stdio')

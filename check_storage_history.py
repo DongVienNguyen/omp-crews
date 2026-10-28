@@ -19,6 +19,21 @@ with tempfile.TemporaryDirectory() as temp, isolated_home(temp):
     report=a.routing_report(str(root),temp)
     assert report['runs']==1 and report['native_usage']=={'input':12,'output':3,'durationMs':100}
     assert report['attempts']['repairs']==1
+    assert report['bounded_small']==0 and report['by_requested_combo']=={'unknown':1}
+    summary['roles'][0].update(requested_combo='Medium',effective_combo='Small',small_route='bounded',native_model_known=True)
+    with a.database(temp) as db:
+        db.execute('UPDATE run_summaries SET summary=?',(json.dumps(summary),))
+    report=a.routing_report(str(root),temp)
+    assert report['bounded_small']==1 and report['by_requested_combo']=={'Medium':1}
+    assert report['by_execution_evidence']=={'native_model_known':1}
+    legacy_cell={'role_id':'legacy-bounded','policy_combo':'Small','bounded_small':True}
+    archived=storage._summary({'waves':[{'calls':[legacy_cell]}]},[],[])
+    assert archived['roles'][0]['bounded_small'] is True
+    archived['roles'].append({'role_id':'known-normal','combo':'Medium','small_route':None,'usage':{}})
+    with a.database(temp) as db:
+        db.execute('UPDATE run_summaries SET summary=?',(json.dumps(archived),))
+    report=a.routing_report(str(root),temp)
+    assert report['bounded_small']==1 and report['small_routes']=={'bounded':1,'none':1}
     try:
         with a.database(temp) as db:a.load_run(db,'a'*32,str(root),'history')
     except ValueError as error:assert 'archived' in str(error)

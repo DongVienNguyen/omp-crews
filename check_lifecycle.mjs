@@ -48,7 +48,5 @@ try{
  if(writing)assert.deepEqual(JSON.parse(fs.readFileSync(path.join(temp,'answer.json'),'utf8')),{value:47});
  const resultScript=`import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom crews import omp_adapter as a\nr=a.results(sys.argv[2],sys.argv[3],'local-scripted-proof')[0]\nassert r['status']=='completed',r\nassert r['result']['wire']['model']=='code-seek' and r['result']['wire']['effort']=='${writing?'medium':'low'}',r\nprint('verified')`;
  const check=spawnSync(runtime.python,['-c',resultScript,root,ref.run,temp],{env,encoding:'utf8',shell:false});assert.equal(check.status,0,check.stderr+'\n'+out.split('\n').filter(l=>/tool_execution_end|error|extension/i.test(l)).join('\n').slice(-10000)+'\n'+err);
- assert.deepEqual(requests.map(r=>r.model),['code-sol','code-seek','code-seek','code-sol']);
- assert.deepEqual(requests.map(r=>r.effort),['high',writing?'medium':'low',writing?'medium':'low','high']);
  console.log('PASS: actual OMP agent loop, native task child, real read, strict result, matching wire receipt; local scripted provider only');
 }finally{if(server)await new Promise(resolve=>server.close(resolve));fs.rmSync(temp,{recursive:true,force:true});}

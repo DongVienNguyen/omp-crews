@@ -12,6 +12,6 @@ export function callBridge(settings, base, input) {
   throw error;
  }
  const data=JSON.parse(out);
- if(data.error)throw new Error(`Crews bridge ${input.op}: ${data.error}`);
+ if(data?.error)throw new Error(`Crews bridge ${input.op}: ${data.error}`);
  return data;
 }

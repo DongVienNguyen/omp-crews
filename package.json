@@ -1,6 +1,6 @@
 {
   "name": "crews-omp",
-  "version": "0.6.0",
+  "version": "0.10.0",
   "description": "Policy-gated Crews planning and native OMP agents",
   "type": "module",
   "license": "MIT",
@@ -8,10 +8,12 @@
   "bin": { "crews-omp": "./bin/crews-omp.mjs" },
   "files": [
     "bin/*.mjs", "extension.ts", "runtime-paths.mjs", "bridge-client.mjs",
-    "routing-policy.mjs", "routing-evidence.mjs", "result-policy.mjs", "classifier.mjs", "adaptive-classifier.mjs", "shadow-sampling.mjs", "learning-editor.mjs", "write-scope.mjs", "combo-editor.mjs",
+    "routing-policy.mjs", "routing-evidence.mjs", "result-policy.mjs", "classifier.mjs", "adaptive-classifier.mjs", "shadow-sampling.mjs", "learning-editor.mjs", "recipe-editor.mjs", "write-scope.mjs", "combo-editor.mjs",
+    "rule-editor.mjs",
     "omp_bridge.py", "omp_server.py", "crews/*.py", "crews/*.json",
     "requirements-omp.lock", "legacy-owned.json", "agents/*.md", "skills/crew-omp/SKILL.md", "LICENSE", "NOTICE",
-    "examples/*.json", "check_*.py", "check_*.mjs", "tests/*.mjs", "tests/*.ts", "tests/*.json", "tests/*.py", "VERIFICATION.md"
+    "examples/*.json", "check_*.py", "check_*.mjs", "approval_fixture.py", "tests/*.mjs", "tests/*.ts", "tests/*.json", "tests/*.py", "VERIFICATION.md",
+    "docs/*.md"
   ],
   "omp": { "extensions": ["./extension.ts"] },
   "scripts": { "test:packaging": "node --test tests/packaging.test.mjs" }
