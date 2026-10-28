@@ -1,7 +1,7 @@
 ---
 title: "Cost-aware SDLC micro-loops với kiểm chứng độc lập"
 description: "Small thu facts và sửa được chốt; Medium thi công; Large giải quyết bất định/rủi ro, không định tuyến theo token hay số file."
-status: enabled-by-operator-evaluation-in-progress
+status: completed-enabled-by-operator
 priority: P2
 tags: [routing, sdlc, cost, reliability]
 created: 2026-10-28
@@ -89,4 +89,4 @@ Independent planning review COMPLETE: run6ecb14f37c6c4c8aab4d55fe4fc9c9b2. Imple
 
 ## Handoff
 
-User explicitly enabled logic before benchmark qualification.0.11.1 applied; fresh workflow default sdlc_cost_aware, native crew_workflow exposes original-authority prepare/next/status, one-step direct intake unchanged. Existing manifests pinned; explicit baseline opt-out. Native task.structured default-off root cause fixed in host setup/doctor; strict yield smoke all3roles valid, real CSV native prepare/write/check complete with host behavior pass. Independent enabled-path and setup reviews COMPLETE. Full reconstructed corpus running with failures retained; changed host structured setting mid-run means mixed-condition report, not clean quality proof. Model/effort/state preserved; restart OMP/MCP required. Git branch feat/sdlc-micro-loops. See [verification](../../VERIFICATION.md).
+User explicitly enabled before qualification.0.11.1 main/canary ready; fresh default sdlc_cost_aware, native crew_workflow and strict task.structured enabled. Original authority/model/effort/state, pinned history and retry/replay guards preserved. Native real entry/strict yield smoke and independent reviews pass within stated scope. Full64arm evaluation complete:23workflow-complete each arm; strict accepted0due frozen-source/policy drift and missing/cancelled evidence, quality/latency NO_GO. This is diagnostic mixed-condition evidence, not production or noninferiority proof. [Results](benchmark/results.md). Code commit67d634a pushed; restart OMP/MCP required.
