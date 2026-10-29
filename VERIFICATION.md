@@ -2,6 +2,12 @@
 
 This file records observed release checks, not a guarantee of production task quality or model equivalence. User instructions: [Vietnamese usage guide](docs/usage.vi.md). Executable owners: [governance](crews/governance.py), [automation](crews/automation.py), [portable rules](crews/portable_rules.py), [host adapter](crews/omp_adapter.py).
 
+## Immutable benchmark repair
+
+- Fixed mutable-checkout execution: benchmark re-execs a private executable snapshot before task freeze. Generated host extension and native bridge are pinned; bridge checks before/finally after dispatch. Host config/model digest, strict overlay and model policy are checked; policy deletion refuses instead of falling back. Both CLI option forms work.
+- check_frozen_benchmark.py executes a real worker and bridge. Working checkout edits remain isolated; snapshot/config/overlay/policy edits and deletion refuse; mutation during bridge triggers finally refusal. No credential contents copied to proof. Full32-unit oracle/64manifest validation and selected4-unit/8manifest validation passed inside snapshot runtime.
+- Independent closure reviewd70c302351cd4d489922b3561a2bb078 COMPLETE, static scope. Clean8arm real-provider regression finished: candidate4/4strict accepted, baseline3/4, zero binding violations. Baseline tenant writer cancelled at575935ms despite oracle-pass artifact; native delivery proof still missing, evaluator NO_GO retained. [Immutable results](plans/20261028-sdlc-micro-loops/benchmark/immutable-results.md). No old failures relabelled or unseen-holdout claim.
+
 ## 0.11.1 enabled SDLC verification
 
 - Explicit operator decision enables fresh sdlc_cost_aware workflows before benchmark qualification. Native crew_workflow prepare/next/status/recheck/recover uses original grants, confirmed mutations and exact returned crew refs. Existing baseline manifests stay pinned; main model/effort/state unchanged.

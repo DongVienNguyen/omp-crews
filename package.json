@@ -13,7 +13,7 @@
     "omp_bridge.py", "omp_server.py", "crews/*.py", "crews/*.json",
     "requirements-omp.lock", "legacy-owned.json", "agents/*.md", "skills/crew-omp/SKILL.md", "LICENSE", "NOTICE",
     "examples/*.json", "check_*.py", "check_*.mjs", "approval_fixture.py", "tests/*.mjs", "tests/*.ts", "tests/*.json", "tests/*.py", "VERIFICATION.md",
-    "docs/*.md"
+    "docs/*.md", "plans/20261028-sdlc-micro-loops/benchmark/*.py"
   ],
   "omp": { "extensions": ["./extension.ts"] },
   "scripts": { "test:packaging": "node --test tests/packaging.test.mjs" }

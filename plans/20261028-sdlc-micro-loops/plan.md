@@ -90,3 +90,5 @@ Independent planning review COMPLETE: run6ecb14f37c6c4c8aab4d55fe4fc9c9b2. Imple
 ## Handoff
 
 User explicitly enabled before qualification.0.11.1 main/canary ready; fresh default sdlc_cost_aware, native crew_workflow and strict task.structured enabled. Original authority/model/effort/state, pinned history and retry/replay guards preserved. Native real entry/strict yield smoke and independent reviews pass within stated scope. Full64arm evaluation complete:23workflow-complete each arm; strict accepted0due frozen-source/policy drift and missing/cancelled evidence, quality/latency NO_GO. This is diagnostic mixed-condition evidence, not production or noninferiority proof. [Results](benchmark/results.md). Code commit67d634a pushed; restart OMP/MCP required.
+
+Immutable-runtime repair completed after original evaluation: source/config/policy pinning, guarded bridges and CLI forms verified. Known4unit/8arm regression candidate4/4strict accepted, baseline3/4, zero binding violations; baseline tenant provider completion missing after deadline, so NO_GO remains honest. Original64arm evidence unchanged. [Repair results](benchmark/immutable-results.md).

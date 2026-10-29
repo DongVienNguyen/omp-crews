@@ -2,12 +2,15 @@
 
 Status complete. Operator enabled0.11.1 default SDLC before qualification; original safety guards preserved. Full32-unit/64-arm provider evaluation finished without replay:23workflow-complete each arm, strict acceptance0due source/policy drift and delivery evidence gaps, quality/latency NO_GO. Host structured prerequisite repaired; mixed-condition diagnostic evidence is not clean quality proof. [Results](benchmark/results.md). Money not evaluated.
 
+Subsequent immutable-runtime repair: [frozen regression results](benchmark/immutable-results.md) record candidate4/4strict accepted versus baseline3/4, zero binding drift. Baseline cancellation still lacks completion proof; no promotion claim or replay. SDLC remains enabled by operator independently.
+
 ## Frozen task corpus
 
 Đề xuất32task độc lập có behavior/oracle rõ,8family,4task/family: retrieval/docs extraction, fixed transforms/scaffold, UI CRUD, API/contract, test+repair, architecture/security, concurrency/precision, performance diagnosis. Có ít nhất một normal/error/boundary hoặc risky near-miss trong mỗi family phù hợp. Đây là số task pilot, không đủ bảo đảm tuyệt đối; confidence phải report, không suy tỷ lệ nhỏ thành production guarantee.
 
 - User approved reconstructed benchmark, clearly labelled; [corpus.py](benchmark/corpus.py) owns32independent exercises and executable acceptance. No production-equivalence claim or old pilot import.
 - Freeze task/spec/acceptance/initial files/source grouping, environment, policy/model binding và evaluator trước chạy. Context-compression baseline/candidate cùng authority và original acceptance.
+- Runtime executable snapshot now precedes task freeze: [frozen_runtime.py](benchmark/frozen_runtime.py) copies whitelist code and generated host extension, reexecs runner, pins host/model/strict-overlay/policy digests, validates every bridge and arm before/after. Editing working checkout cannot alter frozen execution. Regression selections are labelled previously seen, never imported as new holdout.
 - Baseline hiện tại và candidate workflow mới chạy trên isolated identical snapshots; randomize hoặc counterbalance arm order, giữ resource/concurrency điều kiện giống nhau; cached input/provider variance ghi rõ.
 - Training/recipe suggestion không sử dụng holdout evaluation verdict. Development/corpus calibration tách frozen holdout; governance source statistics không học từ candidate benchmark arm rồi reuse baseline arm.
 - Dùng32pairs=64arms chỉ khi cả hai arm được operator-authorized. Failed/cancelled/provider/schema và unknown tính delivery/accounting riêng, không cherry-pick chỉ pairs đã pass. Không reset cap/retry để đủ bảng.

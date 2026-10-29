@@ -13,6 +13,11 @@ starts scripted providers, or calls providers directly. `baseline` and
 use identical policy/environment. Configured native OMP executable and checkout
 extension must be compatible; use provisioned Python 3.12+ with project deps.
 
+Runner reserves fresh output and re-execs from a private executable snapshot.
+Host config/model digests, strict native overlay and normalized policy are pinned;
+drift refuses before/after bridges and arms. --units selects known regression
+exercises, never a new unseen holdout. No live checkout edits affect execution.
+
 Fresh output only: interruption/failure remains terminal evidence. No resume,
 retry, replay or implicit recovery. Failed pairs remain in frozen report. Native
 main sessions get one admitted workflow at a time; workflow host caps child
@@ -42,6 +47,7 @@ from corpus import units
 from crews import omp_adapter as adapter, workflow, workflow_evaluation as evaluation
 from crews.outcomes import digest, fingerprints
 from check_effort_policy import task_answers
+from frozen_runtime import launch_snapshot, validate as validate_runtime
 
 
 def save(path, value):
@@ -147,6 +153,7 @@ export default function(pi) {
 
 
 def native_run(args, output, project, unit, arm, spec, state, host_extension):
+    validate_runtime(ROOT,output,args.agent_dir)
     session = 'benchmark-' + unit.id + '-' + arm
     profile = 'baseline' if arm == 'baseline' else 'sdlc_cost_aware'
     request = dict(operation='workflow_prepare', slot='benchmark', session=session,
@@ -154,12 +161,12 @@ def native_run(args, output, project, unit, arm, spec, state, host_extension):
     prepared = workflow.dispatch(request, str(project), str(state))
     save(output / (unit.id + '-' + arm + '-prepared.json'), prepared)
     env = dict(os.environ, CREWS_OMP_HOME=str(state), CREWS_OMP_PYTHON=sys.executable,
-               CREWS_OMP_AGENT_DIR=str(args.agent_dir.resolve()),
+               CREWS_OMP_AGENT_DIR=str(args.agent_dir.resolve()),PI_CODING_AGENT_DIR=str(args.agent_dir.resolve()),
                BENCHMARK_RUNNER=str(Path(__file__).resolve()), BENCHMARK_PROJECT=str(project),
                BENCHMARK_SLOT='benchmark', BENCHMARK_SESSION=session, PYTHONUTF8='1',
                PYTHONDONTWRITEBYTECODE='1')
     native_config=output/'native-config.yml'
-    if not native_config.exists():native_config.write_text('task:\n  structured: true\n',encoding='utf-8')
+    if not native_config.exists():raise ValueError('frozen native configuration missing')
     argv = [args.omp, '--cwd', str(project), '--no-extensions', '-e', str(ROOT),
             '-e', str(host_extension), '--config',str(native_config),'--model', args.main_model, '--mode', 'json',
             '--no-session', '--max-time', str(args.timeout), '-p',
@@ -177,6 +184,7 @@ def native_run(args, output, project, unit, arm, spec, state, host_extension):
         result = dict(exit_code=process.returncode)
     except (OSError, subprocess.TimeoutExpired) as exc:
         result = dict(error=str(exc))
+    validate_runtime(ROOT,output,args.agent_dir)
     status = workflow.dispatch(dict(operation='workflow_status', slot='benchmark', session=session),
                                str(project), str(state))
     save(output / (unit.id + '-' + arm + '-terminal.json'), dict(process=result, workflow=status))
@@ -186,7 +194,7 @@ def native_run(args, output, project, unit, arm, spec, state, host_extension):
 
 def run(args):
     output = args.output.resolve()
-    output.mkdir(parents=True, exist_ok=False)
+    validate_runtime(ROOT,output,args.agent_dir)
     state = output / 'state'
     state.mkdir()
     os.environ['CREWS_OMP_HOME'] = str(state)
@@ -199,6 +207,10 @@ def run(args):
     if not args.validate_only and (not args.agent_dir or not args.agent_dir.is_dir() or not args.main_model):
         raise ValueError('--agent-dir and --main-model required for real native execution')
     corpus = units()
+    if args.units:
+        requested=set(args.units)
+        if len(requested)!=len(args.units) or not requested<={unit.id for unit in corpus}:raise ValueError('unique existing regression unit IDs required')
+        corpus=tuple(unit for unit in corpus if unit.id in requested)
     specs, projects, frozen_units = {}, {}, []
     validation = []
     for index, unit in enumerate(corpus):
@@ -244,8 +256,7 @@ def run(args):
         print(json.dumps(dict(status='COMPLETE', mode='validate_only', units=len(corpus),
                               canonical_manifests=len(specs), checks='original fails; solution passes all normal/error/boundary criteria; signed quality_only freeze; no provider calls')))
         return
-    host_extension = output / 'benchmark-host.ts'
-    host_extension.write_text(HOST_EXTENSION, encoding='utf-8')
+    host_extension = ROOT / 'benchmark-host.ts'
     schedule = [(unit, arm) for index, unit in enumerate(corpus)
                 for arm in (('baseline', 'candidate') if index % 2 == 0 else ('candidate', 'baseline'))]
     save(output / 'schedule.json', [dict(unit=u.id, arm=arm) for u, arm in schedule])
@@ -259,14 +270,17 @@ def run(args):
         except Exception as exc:
             # Retain exact failure; never retry or omit it from interpretation.
             save(output / (unit.id + '-' + arm + '-harness-failure.json'), dict(error=str(exc)))
+            validate_runtime(ROOT,output,args.agent_dir)
+    validate_runtime(ROOT,output,args.agent_dir)
     request = dict(operation='report', evaluation_id=frozen_result['evaluation_id'], results=refs)
     save(output / 'report-request.json', request)
     try:
         report = evaluation.dispatch(request, str(output), str(state))
     except Exception as exc:
-        report = dict(rollout='NO_GO', error=str(exc), missing_pairs=64-len(refs),
+        report = dict(rollout='NO_GO', error=str(exc), missing_pairs=2*len(corpus)-len(refs),
                       evaluation_mode='quality_only', money_status='not_evaluated')
-    report['benchmark_claim'] = 'Reconstructed tasks only; no production or savings claim'
+    report['runtime_provenance']=dict(source_digest=digest(validate_runtime(ROOT,output,args.agent_dir)['source']),host_configuration_pinned=True,strict_native_output=True)
+    report['benchmark_claim'] = 'Previously seen reconstructed regression tasks only; no unseen holdout, production or savings claim'
     save(output / 'report.json', report)
     print(json.dumps(report, ensure_ascii=False))
 
@@ -276,22 +290,30 @@ def main():
     parser.add_argument('--bridge', nargs=3, metavar=('PROJECT', 'SLOT', 'SESSION'), help=argparse.SUPPRESS)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--validate-only', action='store_true')
+    parser.add_argument('--snapshot-worker',action='store_true',help=argparse.SUPPRESS)
     parser.add_argument('--policy', type=Path)
     parser.add_argument('--agent-dir', type=Path)
     parser.add_argument('--main-model')
     parser.add_argument('--omp', default='omp')
     parser.add_argument('--timeout', type=int, default=900)
     parser.add_argument('--max-latency-ratio', type=float, default=1.2)
+    parser.add_argument('--units',nargs='+',help='Explicit known regression unit IDs; never new unseen holdout')
     args = parser.parse_args()
     if args.bridge:
         project, slot, session = args.bridge
-        print(json.dumps(workflow.dispatch(dict(operation='workflow_next', slot=slot, session=session,
-                                               confirmed=True), project)))
+        validate_runtime(ROOT,ROOT.parent,os.environ.get('CREWS_OMP_AGENT_DIR'))
+        value=workflow.dispatch(dict(operation='workflow_next',slot=slot,session=session,confirmed=True),project)
+        validate_runtime(ROOT,ROOT.parent,os.environ.get('CREWS_OMP_AGENT_DIR'))
+        print(json.dumps(value))
         return
     if args.output is None:
         parser.error('--output new directory required')
     if args.timeout < 1 or not 1 <= args.max_latency_ratio <= 2:
         parser.error('timeout must be positive; max-latency-ratio must be 1..2')
+    if not args.snapshot_worker:
+        raise SystemExit(launch_snapshot(ROOT,args,sys.argv[1:],HOST_EXTENSION))
+    if Path(__file__).resolve()!=args.output.resolve()/'runtime'/Path('plans/20261028-sdlc-micro-loops/benchmark/runner.py'):
+        raise ValueError('snapshot worker must execute reserved runtime copy')
     run(args)
 
 
