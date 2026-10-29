@@ -23,7 +23,7 @@ def reject(call):
     raise AssertionError('expected refusal')
 
 
-def run(evaluation_mode='monetary'):
+def run(evaluation_mode='monetary', max_latency_ms=None):
     with tempfile.TemporaryDirectory(prefix='workflow-accounting-') as folder, isolated_home(folder):
         root = Path(folder)
         signer = Signer()
@@ -53,6 +53,14 @@ def run(evaluation_mode='monetary'):
             frozen['evaluation_mode'] = evaluation_mode
             del frozen['min_cost_reduction']
             reject(lambda: e.dispatch(dict(operation='freeze', spec=frozen), folder, folder))
+        if max_latency_ms is not None:
+            frozen.pop('max_latency_ratio')
+            frozen['max_latency_ms']=max_latency_ms
+            for limit in (None,True,'400000',0,-1,float('nan'),float('inf')):
+                invalid=copy.deepcopy(frozen);invalid['max_latency_ms']=limit
+                reject(lambda: e.dispatch(signer.approve(dict(operation='freeze',spec=invalid),folder,folder),folder,folder))
+            invalid=copy.deepcopy(frozen);invalid['max_latency_ratio']=1.2
+            reject(lambda: e.dispatch(signer.approve(dict(operation='freeze',spec=invalid),folder,folder),folder,folder))
         for key in ('profile', 'model', 'policy', 'environment'):
             bad = copy.deepcopy(frozen)
             bad['arms']['candidate'][key] = 'wrong' if key in ('profile', 'model') else {'wrong': True}
@@ -94,6 +102,7 @@ def run(evaluation_mode='monetary'):
         if evaluation_mode == 'quality_only':
             assert report['evaluation_mode'] == 'quality_only' and report['money_status'] == 'not_evaluated'
             assert report['cost_gate'] is None and not report['missing'] and not report['violations']
+            if max_latency_ms is not None:assert report['latency_criterion']==dict(kind='absolute',max_latency_ms=max_latency_ms)
             for arm in ('baseline', 'candidate'):
                 assert report[arm]['total_cost'] is None and report[arm]['cost_per_accepted'] is None
                 assert report[arm]['latency_complete'] and not report[arm]['accounting_complete']

@@ -70,6 +70,15 @@ def summarize(records, evaluation_mode='monetary'):
                 latency_complete=latency_full, unknown_is_zero=False)
 
 
+def latency_gate(left, right, spec):
+    if not left.get('latency_complete') or not right.get('latency_complete'):
+        return False
+    if 'max_latency_ms' in spec:
+        return _number(right.get('p95')) and right['p95'] <= spec['max_latency_ms']
+    return (_number(left.get('p95')) and _number(right.get('p95'))
+            and right['p95'] <= left['p95'] * min(1.2, spec['max_latency_ratio']))
+
+
 def compare(baseline, candidate, evaluation_mode='monetary'):
     """Untrusted arithmetic preview. Only dispatch can issue authenticated GO."""
     left, right = summarize(baseline, evaluation_mode), summarize(candidate, evaluation_mode)
@@ -103,7 +112,11 @@ def _freeze(request, project, state):
     mode = spec.get('evaluation_mode', 'monetary') if isinstance(spec, dict) else None
     if mode not in ('monetary', 'quality_only'):
         raise ValueError('workflow evaluation mode invalid')
-    gates = {'noninferiority_margin', 'max_latency_ratio'}
+    absolute = isinstance(spec, dict) and 'max_latency_ms' in spec
+    if absolute and (mode != 'quality_only' or 'max_latency_ratio' in spec):
+        raise ValueError('absolute latency requires quality_only and replaces ratio')
+    latency_key = 'max_latency_ms' if absolute else 'max_latency_ratio'
+    gates = {'noninferiority_margin', latency_key}
     if mode == 'monetary':
         gates.add('min_cost_reduction')
     fields = gates | {'units', 'arms'}
@@ -124,7 +137,8 @@ def _freeze(request, project, state):
             raise ValueError('workflow source family cannot cross split')
         seen.add(unit['id'])
         groups[unit['source_group']] = unit['split']
-    if any(not _number(spec[k]) for k in gates) or not 0 <= spec['noninferiority_margin'] <= .1 or not 1 <= spec['max_latency_ratio'] <= 2 or (mode == 'monetary' and not 0 <= spec['min_cost_reduction'] < 1):
+    valid_latency = _number(spec[latency_key]) and (spec['max_latency_ms'] > 0 if absolute else 1 <= spec['max_latency_ratio'] <= 2)
+    if any(not _number(spec[k]) for k in gates) or not 0 <= spec['noninferiority_margin'] <= .1 or not valid_latency or (mode == 'monetary' and not 0 <= spec['min_cost_reduction'] < 1):
         raise ValueError('workflow evaluation gates outside conservative limits')
     arms = spec['arms']
     if not isinstance(arms, dict) or set(arms) != {'baseline', 'candidate'}:
@@ -379,8 +393,9 @@ def dispatch(request, project, state):
     if mode == 'quality_only':
         report['accounting_complete'] = False
         report['cost_gate'] = None
-        report['latency_gate'] = bool(not missing and not violations and left['latency_complete'] and right['latency_complete']
-                                     and right['p95'] <= left['p95'] * min(1.2, spec['max_latency_ratio']))
+        report['latency_gate'] = bool(not missing and not violations and latency_gate(left, right, spec))
+        report['latency_criterion'] = ({'kind':'absolute','max_latency_ms':spec['max_latency_ms']}
+                                       if 'max_latency_ms' in spec else {'kind':'relative','max_latency_ratio':min(1.2,spec['max_latency_ratio'])})
         required_gates = ('quality_gate', 'latency_gate')
     else:
         report['cost_gate'] = bool(report['accounting_complete'] and left['cost_per_accepted'] is not None and right['cost_per_accepted'] is not None and right['cost_per_accepted'] <= left['cost_per_accepted'] * (1 - max(.15, spec['min_cost_reduction'])))

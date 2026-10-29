@@ -2,6 +2,12 @@
 
 This file records observed release checks, not a guarantee of production task quality or model equivalence. User instructions: [Vietnamese usage guide](docs/usage.vi.md). Executable owners: [governance](crews/governance.py), [automation](crews/automation.py), [portable rules](crews/portable_rules.py), [host adapter](crews/omp_adapter.py).
 
+## Operator400-second latency reassessment
+
+User explicitly replaced tenant relative1.2x gate with absolute400seconds. Original snapshot evaluator revalidated quality/native/host proof, both arms strict accepted1/1, no gaps/violations. Candidate391330.568ms passes400000ms by8669.432ms. Current operator-criterion verdict GO for this known pair; old signed relative verdict NO_GO remains unchanged, no provider rerun or new signed freeze claimed. [Reassessment](plans/20261028-sdlc-micro-loops/benchmark/tenant-400s-reassessment.md).
+
+Signed quality_only spec now permits mutually exclusive max_latency_ms/max_latency_ratio. Absolute boundary/type/missing-proof and signed contract regression passed; existing monetary/relative quality suite passed. Independent static reviewdfb53301d7464ca4a81b0fc2f4678ebe COMPLETE. No model/deadline/quality guard changes.
+
 ## Tenant terminal completion correction
 
 Adapter now requests native terminal yield({data:full result}) rather than plain JSON final output, immediately after required checks with actual status/evidence. Old tenant trace ended its tools at50.3s then stalled until575.9s cancellation; no yield rejection observed. Protocol mismatch is corrected, but provider-side cause of old stall is not proven.

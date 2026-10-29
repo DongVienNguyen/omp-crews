@@ -242,6 +242,9 @@ def run(args):
             for arm, profile in (('baseline', 'baseline'), ('candidate', 'sdlc_cost_aware'))}
     frozen = dict(units=frozen_units, arms=arms, noninferiority_margin=0,
                   max_latency_ratio=args.max_latency_ratio, evaluation_mode='quality_only')
+    if args.max_latency_seconds is not None:
+        frozen.pop('max_latency_ratio')
+        frozen['max_latency_ms']=args.max_latency_seconds*1000
     # Test-only signer is legal ONLY in this newly created isolated state.
     from approval_fixture import Signer
     signer = Signer()
@@ -297,6 +300,7 @@ def main():
     parser.add_argument('--omp', default='omp')
     parser.add_argument('--timeout', type=int, default=900)
     parser.add_argument('--max-latency-ratio', type=float, default=1.2)
+    parser.add_argument('--max-latency-seconds',type=float,help='Absolute candidate P95 ceiling instead of baseline ratio')
     parser.add_argument('--units',nargs='+',help='Explicit known regression unit IDs; never new unseen holdout')
     args = parser.parse_args()
     if args.bridge:
@@ -310,6 +314,8 @@ def main():
         parser.error('--output new directory required')
     if args.timeout < 1 or not 1 <= args.max_latency_ratio <= 2:
         parser.error('timeout must be positive; max-latency-ratio must be 1..2')
+    if args.max_latency_seconds is not None and (not __import__('math').isfinite(args.max_latency_seconds) or args.max_latency_seconds<=0):
+        parser.error('max-latency-seconds must be positive and finite')
     if not args.snapshot_worker:
         raise SystemExit(launch_snapshot(ROOT,args,sys.argv[1:],HOST_EXTENSION))
     if Path(__file__).resolve()!=args.output.resolve()/'runtime'/Path('plans/20261028-sdlc-micro-loops/benchmark/runner.py'):
