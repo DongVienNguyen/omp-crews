@@ -2,6 +2,22 @@
 
 This file records observed release checks, not a guarantee of production task quality or model equivalence. User instructions: [Vietnamese usage guide](docs/usage.vi.md). Executable owners: [governance](crews/governance.py), [automation](crews/automation.py), [portable rules](crews/portable_rules.py), [host adapter](crews/omp_adapter.py).
 
+## Tenant terminal completion correction
+
+Adapter now requests native terminal yield({data:full result}) rather than plain JSON final output, immediately after required checks with actual status/evidence. Old tenant trace ended its tools at50.3s then stalled until575.9s cancellation; no yield rejection observed. Protocol mismatch is corrected, but provider-side cause of old stall is not proven.
+
+New frozen tenant pair: baseline/candidate strict accepted1/1, quality_gate=true, zero missing/violations. Baseline Large/high writer native valid, exit0, not aborted,168413ms; independent Small checker valid with host behavior pass. Candidate writer valid333138ms. Overall NO_GO remains solely latency_gate=false (end-to-end224301ms baseline versus391331ms candidate, unchanged1.2x gate). Model/effort,600sdeadline, scopes, acceptance and proof guards unchanged. [Terminal results](plans/20261028-sdlc-micro-loops/benchmark/tenant-terminal-results.md).
+
+Contract/native strict/result-policy/workflow/repair/quality/frozen-runtime/effort checks passed. Independent review8eb50c8207c4448f83878f4381f1537c COMPLETE within static safety scope. Historical cancelled attempts unchanged; new regression is not broad qualification or availability guarantee.
+
+## Explicit workflow snapshot recovery
+
+Prepare records installation identity and all-node effective routes. Snapshot recovery is exact old/new policy/source digest CAS for wholly unexecuted workflows only; model/effective route changes, installation mismatch, missing legacy provenance, disabled authority and any retry/admission/execution history refuse. Metadata refresh keeps run IDs, original scope/acceptance/profile and counters; it never advances pending nodes. Existing dead-reservation recovery remains separate.
+
+Focused Python checks passed: `check_workflow_snapshot_recovery.py`, `check_workflow.py`, `check_workflow_recovery.py`, `check_workflow_repair.py`, `check_workflow_accounting.py`. Actual Node-host `check_workflow_native.mjs` passed against local scripted provider. Earlier Bun-host launcher/environment failures retained; no real-provider quality inference.
+
+Independent current-source review `c2c644276ef340a1989b1375da96ec7a`, `review-snapshot-recovery`, COMPLETE with native/wire `9router/code-astra:high`, exit0. Static review only; no live recovery exercised by reviewer. Earlier reviews `cb60c2562d5b45cbb3aeabdece87edb0`, `9085d4817cb64306a779dd0ae7d60a14`, `a764eb3946ee429c898005f43e931a90` remain FAILED at their snapshots. Legacy manifests without preparation provenance are not retroactively certified.
+
 ## Immutable benchmark repair
 
 - Fixed mutable-checkout execution: benchmark re-execs a private executable snapshot before task freeze. Generated host extension and native bridge are pinned; bridge checks before/finally after dispatch. Host config/model digest, strict overlay and model policy are checked; policy deletion refuses instead of falling back. Both CLI option forms work.

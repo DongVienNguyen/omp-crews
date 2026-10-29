@@ -21,6 +21,8 @@ Baseline tenant producer Large/high was aborted at575935ms after8requests. Nativ
 
 Artifact pass is not a completed native task. Cancellation/absent final model receipt remains unverified delivery. No historical result or attempt was rewritten; diagnostic oracle run was not entered as a replacement receipt. Provider latency/availability cannot be repaired through benchmark code; deadline, model and evidence guards were not weakened to manufacture GO.
 
+Subsequent terminal-protocol regression is recorded [separately](tenant-terminal-results.md): new baseline/candidate tenant strict accepted1/1 with native completion and no proof gaps. Earlier cancelled attempt and this report remain unchanged. Quality now passes in that known pair; latency gate still fails, so no broader GO claim.
+
 ## Repair and checks
 
 - Runner reserves fresh output, snapshots whitelist executable source and generated host extension, then re-execs runner/bridge/extension/evaluator inside private runtime before task freeze.
