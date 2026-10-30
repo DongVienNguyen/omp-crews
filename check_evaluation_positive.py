@@ -41,7 +41,7 @@ def run():
   else:raise AssertionError('same run reused as both evaluation arms')
   with a.database(folder) as db:
    result=json.loads(db.execute('SELECT result FROM calls WHERE run=? AND role=?',(refs[1]['run'],'value-check')).fetchone()[0])
-   result['outcome']['behavior']='unknown'
+   result['tool_receipts']=[]  # Missing independent executable proof must remain unknown.
    db.execute('UPDATE calls SET result=? WHERE run=? AND role=?',(json.dumps(result),refs[1]['run'],'value-check'))
   unknown=evaluation.dispatch({'operation':'report','evaluation_id':eid,'results':refs},folder,folder)
   assert unknown['rollout']=='NO_GO' and any(len(x)>2 and x[2]=='independent_behavior_unknown' for x in unknown['missing'])

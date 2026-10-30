@@ -17,6 +17,7 @@ let server;
 const writing=process.argv.includes('--bounded-write');
 try{
  fs.writeFileSync(path.join(temp,'fixture.json'),'{"value":47}\n');
+ fs.writeFileSync(path.join(temp,'private.json'),'UNADMITTED_SECRET');
  const script=`import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom omp_server import crew_plan\nrole={'name':'local-fixture-checker','kind':'check','mission':'Read fixture JSON and verify value 47','deliverable':'verdict.json','scope':[],'inputs':['fixture.json'],'criteria':['value equals 47'],'answers':{'need':'mechanical_verification','difficulty':0,'divisible':0,'specific':1}}\na={'need':{'choice':'mechanical_verification','confidence':1,'probabilities':{'mechanical_verification':1}},'difficulty':{'score':0},'divisible':{'noul':0},'needs_verifier':{'noul':1}}\np=crew_plan({'task':'Read fixture and verify value','roles':[role]},a,sys.argv[2],'local-scripted-proof');print(json.dumps({'run':p['run_id'],'role':role['name'],'session':p['session']}))`;
  const producerScript=`import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom omp_server import crew_plan\nr={'name':'local-fixture-writer','kind':'produce','mission':'Write answer.json with numeric value47; use independent fixture checker','deliverable':'verdict.json','scope':['answer.json'],'inputs':['fixture.json'],'commands':['node check.mjs'],'bounded_check':{'input':'fixture.json','command':'node check.mjs'},'acceptance':['Written answer equals fixture value47'],'facts':{'targets_fixed':True,'behavior_fixed':True,'scope_bounded':True,'deterministic_check':True,'behavior_undecided':False,'unknown_cause':False,'consequential_judgment':False,'cross_system':False,'concurrency_sensitive':False},'answers':{'need':'everyday_implementation','difficulty':1,'divisible':0,'specific':1}}\na={'need':{'choice':'everyday_implementation','confidence':1,'probabilities':{'everyday_implementation':1}},'difficulty':{'score':1},'divisible':{'noul':0},'needs_verifier':{'noul':0}}\np=crew_plan({'task':'Write answer fixture with bounded behavior','roles':[r]},a,sys.argv[2],'local-scripted-proof');assert p['waves'][0]['calls'][0]['bounded_small'];print(json.dumps({'run':p['run_id'],'role':r['name'],'session':p['session']}))`;
  const plan=spawnSync(runtime.python,['-c',writing?producerScript:script,root,temp],{env,encoding:'utf8',shell:false});
@@ -27,12 +28,16 @@ try{
   const body=JSON.parse(text);requests.push({model:body.model,effort:body.reasoning_effort});
   const messages=body.messages??[];const hasTool=messages.some(m=>m.role==='tool');let delta,finish;
   if(body.model==='code-sol'){
-   delta=hasTool?{role:'assistant',content:'Local lifecycle complete'}:{role:'assistant',tool_calls:[{index:0,id:'local_task',type:'function',function:{name:'task',arguments:JSON.stringify({crew:ref})}}]};
-   finish=hasTool?'stop':'tool_calls';
+   const tools=messages.filter(m=>m.role==='tool');
+   if(tools.length)assert.match(JSON.stringify(tools[0]),/canonical intake|ordinary delegation is disabled/);
+   delta=tools.length>=2?{role:'assistant',content:'Local lifecycle complete'}:{role:'assistant',tool_calls:[{index:0,id:'local_task_'+tools.length,type:'function',function:{name:'task',arguments:JSON.stringify(tools.length?{crew:ref}:{tasks:[{agent:'scout',task:'Read fixture'}]})}}]};
+   finish=tools.length>=2?'stop':'tool_calls';
   }else{
-   const observed=messages.filter(m=>m.role==='tool').map(m=>JSON.stringify(m.content)).join('');
-   delta=hasTool?{role:'assistant',content:JSON.stringify({status:'COMPLETE',verification:['Observed actual fixture tool result']})}:{role:'assistant',tool_calls:[{index:0,id:'local_tool',type:'function',function:{name:writing?'write':'read',arguments:JSON.stringify(writing?{i:'Writing scoped fixture',path:path.join(temp,'answer.json'),content:'{"value":47}\n'}:{i:'Reading local fixture',path:path.join(temp,'fixture.json')})}}]};
-   finish=hasTool?'stop':'tool_calls';
+   const tools=messages.filter(m=>m.role==='tool');
+   if(!writing&&tools.length)assert.match(JSON.stringify(tools[0]),/outside admitted Crews authority/);
+   const done=tools.length>=(writing?1:2);
+   delta=done?{role:'assistant',content:JSON.stringify({status:'COMPLETE',verification:['Observed actual fixture tool result']})}:{role:'assistant',tool_calls:[{index:0,id:'local_tool_'+tools.length,type:'function',function:{name:writing?'write':'read',arguments:JSON.stringify(writing?{i:'Writing scoped fixture',path:path.join(temp,'answer.json'),content:'{"value":47}\n'}:{i:'Reading local fixture',path:path.join(temp,tools.length?'fixture.json':'private.json')})}}]};
+   finish=done?'stop':'tool_calls';
   }
   const base={id:'local-scripted',object:'chat.completion.chunk',created:Math.floor(Date.now()/1000),model:body.model};
   res.writeHead(200,{'Content-Type':'text/event-stream'});

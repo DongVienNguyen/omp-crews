@@ -7,7 +7,6 @@ import {createPlanRecovery,isCrewPlanCall} from './routing-policy.mjs';
 import {callBridge} from './bridge-client.mjs';
 import {resolveRuntime} from './runtime-paths.mjs';
 import {Classifier,loadClassifierConfig} from './classifier.mjs';
-import {completeSimple} from '@oh-my-pi/pi-ai';
 import {editCombos} from './combo-editor.mjs';
 import {classifyAdaptive} from './adaptive-classifier.mjs';
 import {manageLearning} from './learning-editor.mjs';
@@ -15,6 +14,7 @@ import {sessionRoutingReport} from './routing-evidence.mjs';
 import {admittedWrite,admittedRead} from './write-scope.mjs';
 import {manageRecipes} from './recipe-editor.mjs';
 import {manageRules} from './rule-editor.mjs';
+import {prepareHostBinding,assertHostBinding,createHostLedger} from './host-binding.mjs';
 const base=path.dirname(fileURLToPath(import.meta.url));
 let settings:any;
 try{settings=resolveRuntime(base);}catch{settings=null;}
@@ -23,8 +23,14 @@ function requireRuntime(){
  return settings;
 }
 function bridge(input:any){return callBridge(requireRuntime(),base,input);}
-export default function(pi:any){
- const z=pi.zod;let child:any=null,wireOK=false,conflict=false;
+export function createCrewsExtension(options?:{hostBinding?:any;runtime?:any}){
+ const runtime=options?.runtime??requireRuntime();
+ const settings=runtime;
+ const bridge=(input:any)=>callBridge(runtime,base,input);
+ const binding=options?.hostBinding?prepareHostBinding(options.hostBinding):null;
+ return function(pi:any){
+ const z=pi.zod;let child:any=null,wireOK=false,conflict=false,ledger:any=null;
+ if(binding)for(const tool of binding.tools)pi.registerTool(tool);
  const dispatches=new Map<string,any>();const dispatchContext=new AsyncLocalStorage<any>();
  const recovery=createPlanRecovery();let mainReceipt=false;
  let classifierRequest=false;
@@ -37,6 +43,7 @@ export default function(pi:any){
   try{
    const effort=request.model.slice(request.model.lastIndexOf(':')+1);
    if(effort!=='low'&&effort!=='medium'&&effort!=='high')throw Error('Classifier requires a valid Combo effort');
+   const {completeSimple}=await import('@oh-my-pi/pi-ai');
    const message=await completeSimple(resolved,{systemPrompt:[request.prompt],messages:[{role:'user',content:JSON.stringify(request.input),timestamp:Date.now()}]},{apiKey:requestContext.modelRegistry.resolver(resolved,requestContext.sessionManager.getSessionId()),reasoning:effort,maxTokens:request.maxTokens,signal:request.signal});
    return {text:message.content.filter((p:any)=>p.type==='text').map((p:any)=>p.text).join(''),stopReason:message.stopReason,usage:message.usage};
   }finally{classifierRequest=false;}
@@ -70,21 +77,26 @@ export default function(pi:any){
    bridge({op:'automation_ensure',project:ctx.cwd});
    const pending=bridge({op:'automation',request:{operation:'status'},project:ctx.cwd});
    const resume=pending.enabled&&pending.jobs?.some((job:any)=>['queued','reviewing'].includes(job.state));
-   const workflowPolicy=' SDLC workflow is enabled by operator for fresh Crews work. For multi-stage coding with known original read/write/commands and acceptance, use crew_workflow prepare/next/status and dispatch returned exact crew references. Classify each node role by deliverable; use Small for source retrieval/fixed transforms/deterministic checks, Medium for known implementation, Large only for uncertainty/risk. Add scout only when context missing. Keep checker independent. For one-step tasks use direct canonical intake. Never invent authority, silently replay, change main model, or reroute ordinary native tasks. Explicit profile baseline opts out for a fresh workflow; existing manifests stay pinned.';
-   return {message:{customType:'crews-routing-policy',content:'Crew work: read crew_catalog canonical schema and rubric before planning. Assign each role to Combo Small, Medium or Large using task capability; effort is Low/Medium/High or Auto from role difficulty. Auto: below1 low, below2 medium, otherwise high. Explicit Combo effort wins. Classify each role, not the entire project. Repair failed crew_plan before delegation; ordinary tasks receive no Crews routing. Main chat model stays unchanged.'+workflowPolicy+(resume?' Operator-authorized automation queue pending. Before other work invoke task with ONLY {automation:true}; host selects frozen jobs and enforces signed authority. Do not create replacement plans or approve requests yourself.':''),display:false}};
+  const workflowPolicy=' SDLC workflow enabled for fresh Crews work. Multi-stage coding uses crew_workflow prepare/next/status with original read/write/commands and acceptance; dispatch exact returned crew references. Classify each role by deliverable: Small for retrieval/fixed transforms/deterministic checks, Medium for known implementation, Large for uncertainty/risk. Add scout only when context is missing. Keep checker independent. One-step tasks use canonical intake. Every delegation requires canonical intake or admitted crew reference; ordinary native selectors are refused, never remapped. Never invent authority, silently replay or change main model. Explicit baseline profile opts out for fresh workflows; existing manifests stay pinned.';
+  return {message:{customType:'crews-routing-policy',content:'Read crew_catalog for canonical schema and rubric. Combo Small/Medium/Large and configured effort come only from Crews admission. Auto effort: difficulty below1 low, below2 medium, otherwise high. Explicit Combo effort wins. Classify role, not entire project. Repair failed crew_plan before delegation. Main chat model stays unchanged.'+workflowPolicy+(resume?' Operator-authorized automation queue pending. Before other work invoke task with ONLY {automation:true}; host selects frozen jobs and enforces authority. Do not create replacement plans or approve requests yourself.':''),display:false}};
   }
   const token=((event.prompt||'')+'\n'+(event.systemPrompt||[]).join('\n')).match(/\[crew-ticket:([a-f0-9]{32})\]/)?.[1];
   if(!ctx.agent.name?.startsWith('crew-'))return;
   if(!token){ctx.abort();throw Error('Crew child has no admission ticket');}
   child=bridge({op:'ticket',token,project:ctx.cwd});
+  if(child.call.automation_governance)await pi.setActiveTools(['yield']);
   if(child.call.agent_type!==ctx.agent.name){ctx.abort();throw Error('Crew child identity mismatch');}
+  if(child.call.host_binding){
+   assertHostBinding(binding,child.call.host_binding);ledger=createHostLedger(binding);
+   await pi.setActiveTools([...binding!.descriptor.tools.map((t:any)=>t.name),'yield']);
+  }else if(binding){ctx.abort();throw Error('Trusted host child missing canonical binding');}
+  if(child.call.host_binding){
+   pi.on('session_shutdown',()=>binding?.onComplete?.({sessionId:ctx.sessionManager.getSessionId(),ledger:ledger?.status()}));
+  }
  });
  pi.on('before_subagent_spawn',(event:any,ctx:any)=>{
-  if(isChild(ctx)&&ctx.agent.name?.startsWith('crew-'))return {block:true,reason:'Crew depth is one'};
-  if(!event.agent?.startsWith('crew-')){
-   if(dispatches.size)return {block:true,reason:'Active crew requires planned seats'};
-   return;
-  }
+  if(isChild(ctx))return {block:true,reason:'Crew depth is one'};
+  if(!event.agent?.startsWith('crew-'))return {block:true,reason:'Crews canonical intake and admitted native dispatch required for delegation'};
   const active=dispatchContext.getStore();
   if(conflict||!active||event.agent!==active.call.agent_type)return {block:true,reason:'Crew spawn requires current native admission'};
   if(event.invocationKind&&event.invocationKind!=='task')return {block:true,reason:'Crews uses the native task path only'};
@@ -105,7 +117,10 @@ export default function(pi:any){
   if(!wireOK){ctx.abort();throw Error('Crew model or effort drift');}
   const receipt={model,effort,provider:ctx.model?.provider,role:child.role,token:child.token,time:Date.now()};
   bridge({op:'store_receipt',token:child.token,project:ctx.cwd,payload:receipt});
+  if(child.call.host_binding)binding?.onComplete?.({sessionId:ctx.sessionManager.getSessionId(),ledger:ledger?.status()});
+  if(child.call.host_binding){assertHostBinding(binding,child.call.host_binding);try{return ledger.request(event.payload);}catch(error){ctx.abort();throw error;}}
  });
+ pi.on('assistant_message',(event:any,ctx:any)=>{if(child?.call.host_binding){try{ledger.observe(event.message);}catch(error){ctx.abort();throw error;}}});
  pi.on('tool_call',(event:any,ctx:any)=>{
   if(!isChild(ctx)){
    if(isCrewPlanCall(event.toolName,event.input))recovery.begin(event.toolCallId);
@@ -118,8 +133,13 @@ export default function(pi:any){
   if(!child||!wireOK)return {block:true,reason:'Crew admission/wire verification missing'};
   try{bridge({op:'ticket',token:child.token,project:ctx.cwd});}catch{return {block:true,reason:'Crew admission expired/revoked'};}
   const name=event.toolName,input=event.input;
+  if(child.call.host_binding){
+   try{assertHostBinding(binding,child.call.host_binding);}catch{return {block:true,reason:'Trusted host binding invalid'};}
+   if(name==='yield'||binding!.descriptor.tools.some((tool:any)=>tool.name===name))return;
+   return {block:true,reason:'Tool outside trusted host allowlist; nested delegation unsupported'};
+  }
   const reads=['read','grep','glob','find','ls','ast_grep','yield'];
-  if(reads.includes(name)&&(!child.call.workflow_id||name==='yield'||admittedRead(ctx.cwd,input,name,child.call.read_scope)))return;
+  if(reads.includes(name)&&(name==='yield'||admittedRead(ctx.cwd,input,name,child.call.read_scope)))return;
   if(name==='bash'&&child.call.commands.includes(input.command))return;
   if(['write','edit'].includes(name)&&/^crew-(produce|integrate)-/.test(ctx.agent.name)&&admittedWrite(ctx.cwd,input,name,child.call.write_scope))return;
   return {block:true,reason:'Tool/command/file is outside admitted Crews authority'};
@@ -150,7 +170,9 @@ export default function(pi:any){
    const outputSchema:any={type:'object',properties:{status:{type:'string',enum:['COMPLETE','PARTIAL','BLOCKED','FAILED']},verification:{type:'array',items:{type:'string'}},criterion_results:criterionSchema},required:active.call.checker_profile?['status','verification','criterion_results']:['status','verification']};
    if(active.call.automation_governance){outputSchema.properties.policy_decision=bridge({op:'automation_schema'});outputSchema.required.push('policy_decision');}
    if(active.call.context_request){outputSchema.properties.context_packet=bridge({op:'context_schema'});outputSchema.required.push('context_packet');}
-   const result=await dispatchContext.run(active,()=>ctx.invokeTool({context:`Independent role; use only its brief. [crew-ticket:${active.token}]`,tasks:[{agent:active.call.agent_type,task:active.call.prompt,solutionSpace:'Execute explicit role authority. Model/effort from admission.',outputSchema,schemaMode:'strict'}]},{signal,onUpdate:update}));
+   if(active.call.host_binding){assertHostBinding(binding,active.call.host_binding);outputSchema.properties.result=binding!.descriptor.result_schema;outputSchema.required.push('result');outputSchema.additionalProperties=false;}
+   const task=active.call.prompt+(active.call.host_binding?'\nReturn full native yield envelope with required status, verification and result. result must match original schema: '+JSON.stringify(binding!.descriptor.result_schema):'');
+   const result=await dispatchContext.run(active,()=>ctx.invokeTool({context:`Independent role; use only its brief. [crew-ticket:${active.token}]`,tasks:[{agent:active.call.agent_type,task,solutionSpace:'Execute explicit role authority. Model/effort from admission.',outputSchema,schemaMode:'strict'}]},{signal,onUpdate:update}));
    const rows=result.details?.results;
    const row=rows?.[0];const proof=bridge({op:'receipt',token:active.token,project:ctx.cwd});
    let payload=row?.structuredOutput?.data;
@@ -197,10 +219,15 @@ export default function(pi:any){
   }catch(error){automationNotice(ctx,'failed',error instanceof Error?error.message:String(error));}
   finally{automationDraining=false;}
  }
- pi.registerTool({name:'crew_workflow',label:'Enabled SDLC workflow',description:'Prepare/status/next/recheck/recover canonical dependency workflow. Default sdlc_cost_aware; explicit baseline opts out. Requires original authority, invariants, node-local roles/answers. Returns exact task crew references; never auto-dispatches or invents authority.',parameters:z.object({request:z.object({operation:z.enum(['prepare','status','next','recheck','recover']),slot:z.string(),session:z.string(),workflow:z.any().optional(),profile:z.enum(['baseline','sdlc_cost_aware']).optional(),node:z.string().optional(),run:z.string().optional(),confirmed:z.boolean().optional()})}),async execute(_id:any,p:any,_signal:any,_update:any,ctx:any){
+ pi.registerTool({name:'crew_workflow',label:'Enabled SDLC workflow',description:'Prepare/status/next/recheck/recover canonical dependency workflow. Default sdlc_cost_aware; explicit baseline opts out. Requires original authority, invariants, node-local roles/answers. Returns exact task crew references; never auto-dispatches or invents authority.',parameters:z.object({request:z.object({operation:z.enum(['prepare','status','next','recheck','recover']),slot:z.string(),session:z.string(),workflow:z.any().optional(),profile:z.enum(['baseline','sdlc_cost_aware']).optional(),node:z.string().optional(),run:z.string().optional(),snapshot:z.object({old_policy:z.string(),new_policy:z.string(),old_sources:z.string(),new_sources:z.string()}).optional(),adoption:z.object({manifest:z.string(),provenance_unknown:z.literal(true)}).optional(),confirmed:z.boolean().optional()})}),async execute(_id:any,p:any,_signal:any,_update:any,ctx:any){
   if(isChild(ctx)||dispatches.size)throw Error('Only idle main host advances workflow');
   checkConflict(ctx.cwd);
   const value=bridge({op:'workflow',project:ctx.cwd,request:{...p.request,operation:'workflow_'+p.request.operation}});
+  return {content:[{type:'text',text:JSON.stringify(value)}],details:value};
+ }});
+ pi.registerTool({name:'crew_capability',label:'Signed capability evidence',description:'Version 1 isolated Small trial, frozen Medium-vs-Small comparison, or non-authoritative opportunities. Signed consent required; returned crew refs use normal task admission.',parameters:z.object({request:z.object({version:z.literal(1),operation:z.enum(['capability_trial','capability_comparison','opportunities']),request:z.any().optional()})}),async execute(_id:any,p:any,_signal:any,_update:any,ctx:any){
+  if(isChild(ctx)||dispatches.size)throw Error('Capability operations require idle main host');
+  const value=bridge({op:'capability',project:ctx.cwd,request:p.request});
   return {content:[{type:'text',text:JSON.stringify(value)}],details:value};
  }});
  pi.registerTool({name:'task',label:'Task / Crews dispatch',description:'Native task, admitted crew reference, canonical intake, or automation:true to drain only operator-authorized frozen Large reviews.',parameters:z.object({automation:z.boolean().optional(),crew:z.object({run:z.string(),role:z.string(),session:z.string()}).optional(),intake:z.object({spec:z.any(),answers:z.any(),session:z.string()}).optional(),context:z.string().optional(),tasks:z.array(z.any()).optional(),agent:z.string().optional(),task:z.string().optional(),solutionSpace:z.string().optional()}).passthrough(),async execute(_id:any,p:any,signal:any,update:any,ctx:any){
@@ -232,21 +259,15 @@ export default function(pi:any){
     role.answers=result.answers;
    }
    const plan=bridge({op:'plan',spec,answers:p.intake.answers,project:ctx.cwd,session:p.intake.session});
+   if(binding){if(spec.roles.length!==1)throw Error('Trusted host binding requires one canonical role');bridge({op:'attach_host_binding',run:plan.run_id,role:plan.waves[0].calls[0].role_id,session:plan.session,project:ctx.cwd,descriptor:binding.descriptor});}
    recovery.result(_id,false);
    routeEvidence(ctx,{path:'crew-intake',toolCallId:_id,run:plan.run_id,roles:spec.roles.map((r:any)=>({name:r.name,answers:r.answers}))});
    return {content:[{type:'text',text:JSON.stringify({run:plan.run_id,session:plan.session,warnings:spec.roles.flatMap((r:any)=>r.classification_evidence?.warnings??[]),waves:plan.waves.map((w:any)=>({kind:w.kind,calls:w.calls.map((c:any)=>({role:c.role_id,model:c.model,effort:c.reasoning_effort,requested_combo:c.requested_combo,effective_combo:c.effective_combo,small_route:c.small_route,small_blockers:c.small_blockers,crew:{run:plan.run_id,role:c.role_id,session:plan.session}}))}))})}],details:{plan}};
    }catch(error){recovery.result(_id,true);throw error;}
   }
-  if(!p.crew){
-   const blocked=recovery.blockReason();if(blocked)throw Error(blocked);
-   routeEvidence(ctx,{path:'native-task',note:'No Crews model remap applies'});
-   if(p.agent?.startsWith('crew-')||p.tasks?.some((t:any)=>t.agent?.startsWith('crew-')))throw Error('Crew agent requires planned admission');
-   const result=await ctx.invokeTool(p,{signal,onUpdate:update});
-   routeEvidence(ctx,{path:'native-task-result',models:result.details?.results?.map((row:any)=>({model:row.resolvedModel,effort:row.resolvedThinkingLevel,exitCode:row.exitCode})),note:'Native delegation; no Crews plan or remap'});
-   return result;
-  }
+  if(!p.crew)throw Error('Crews canonical intake or admitted crew reference required; ordinary delegation is disabled');
   try{return await dispatchCrew(p.crew,ctx,signal,update);}
-  finally{await drainAutomation(ctx,signal,update);}
+  finally{if(!binding)await drainAutomation(ctx,signal,update);}
  }});
  pi.registerTool({name:'crew_automation',label:'Local Large policy governance',description:'Keyless governance status/enable/disable and portable rule export/import proposals. Imported rules require independent Large review before apply.',parameters:z.object({request:z.object({operation:z.enum(['enable','disable','status','export','import','grant','revoke'])}).passthrough()}),async execute(_id:any,p:any,_signal:any,_update:any,ctx:any){
   if(isChild(ctx))throw Error('Automation administration belongs to main session');
@@ -304,3 +325,5 @@ export default function(pi:any){
   try{const role=op==='test'?JSON.parse(rest.join(' ')):undefined;ctx.ui.notify(JSON.stringify(await preview(op,role,ctx)), 'info');}catch(error:any){ctx.ui.notify(error.message,'error');}
  }});
 }
+}
+export default createCrewsExtension();

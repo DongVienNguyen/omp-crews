@@ -328,7 +328,7 @@ def observe(run,project,state=None):
 
 def criterion(job):
     if json.loads(job['request'])['operation']=='govern':
-        return 'Assess exact frozen aggregate policy job '+job['id']+' and return typed policy_decision. No recipe or artifact is being approved. With no historical evidence, choose conservative initial settings or deny with a concrete policy reason. Host enforces receipt, authority and policy schema; do not require producer/checker artifacts for initial policy review.'
+        return 'Assess exact frozen aggregate policy job '+job['id']+' and return typed policy_decision. No recipe or artifact is approved. Routing entries must use {mode:baseline|floor,combo:Small|Medium|Large}. Empty routing inherits capability-aware baseline; do not copy default need mappings as force floors. Choose floor only for an intentional minimum Combo. Preserve existing explicit floors; translate legacy string floors to typed floor unless this operator proposal explicitly authorizes baseline migration. Keep original mode/promotion/risk constraints unless separately reviewed. Initial review needs no producer artifact or private key. Host enforces schema and receipts.'
     return 'Approve exact frozen automation job '+job['id']+' only if checker tests actual original behavior and boundary/errors, authority is unchanged, evidence independent, and all grant/safety/statistical constraints hold; otherwise return FAILED.'
 
 
@@ -406,6 +406,11 @@ def next_review(project,state=None):
 
 
 def finish(job_id,project,state=None):
+    from crews.recipes import evidence_lock
+    with evidence_lock(state):return _finish(job_id,project,state)
+
+
+def _finish(job_id,project,state=None):
     from crews import recipes,omp_adapter as a
     project=a.canonical(project)
     with database(state) as db:
@@ -428,6 +433,8 @@ def finish(job_id,project,state=None):
             if request['operation']=='govern':
                 from crews import governance
                 policy=governance.decision(result.get('policy_decision'))
+                proposal=governance.validate(request['external_proposal'],typed_routing=True)['routing'] if request.get('external_export') else None
+                governance.validate_floor_transition(limits['routing'],policy['routing'],proposal)
                 limits.update(policy);limits.update(epoch=limits['epoch']+1,expires=time.time()+policy['lease_seconds'],paused=False,policy_binding=a.policy_binding(state))
                 _save_grant(db,grant['id'],limits)
                 db.execute('UPDATE automation_grants SET used=0 WHERE id=?',(grant['id'],))

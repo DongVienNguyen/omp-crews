@@ -45,6 +45,25 @@ def run():
   assert not recipes.match(unsafe,directory,[unsafe,checker],directory)['effective_small']
   assert recipes.dispatch({'operation':'status'},directory,directory)['recipes'][0]['hits']==1
   assert recipes.dispatch({'operation':'status'},directory,directory)['captures']==5
+  from unittest.mock import patch
+  with patch('crews.automation.audit_interval',return_value=1):
+   for index in (10,11,12):
+    (p/'input.json').write_text(json.dumps({'value':index}));(p/'target.py').write_text('result=-1\n')
+    audit=a.build_plan({'task':'Implement integer result doubles input','roles':roles},task_answers('everyday_implementation',1,True),directory,'audit-'+str(index),directory)
+    current=next(c for w in audit['waves'] for c in w['calls'] if c['role_id']=='double-writer')
+    assert current['policy_combo']=='Small' and current['audit_delivery_token']
+    assert not recipes.dispatch(dict(operation='lookup',role=writer,roles=roles,confirmed=True),directory,directory)['effective_small']
+    for name in ['double-writer','double-check']:
+     ticket=a.dispatch(audit['run_id'],name,directory,audit['session'],directory);cell=ticket['call'];token=ticket['token']
+     if name=='double-writer':(p/'target.py').write_text('result='+str(index*2)+'\n')
+     wire=dict(token=token,role=name,provider=cell['provider'],model=cell['model'],effort=cell['reasoning_effort']);a.store_receipt(token,directory,wire,directory)
+     if cell.get('checker_profile') and index!=12:a.verify_profile(token,directory,directory,host_key=ticket['host_key'])
+     result=dict(status='COMPLETE',verification=['Isolated audit fixture'],native=dict(exitCode=0,resolvedModel=cell['provider']+'/'+cell['model']+':'+cell['reasoning_effort'],resolvedThinkingLevel=cell['reasoning_effort']),wire=wire)
+     if index==12 and name=='double-check':result=dict(status='COMPLETE',verification=['Fixture unverifiable completion without native exit receipt'])
+     a.record(audit['run_id'],name,result,directory,audit['session'],directory,host_key=ticket['host_key'])
+    row=recipes.dispatch(dict(operation='status'),directory,directory)['recipes'][0]
+    if index==12:assert row['state']=='suspended' and not row['audit_pending'] and row['audits']==2
+    else:assert row['audits']==index-9 and not row['audit_pending'] and row['train']+row['holdout']==5
  print('PASS real intake: verified script results -> consented evidence -> holdout activation -> approved recipe -> fresh Small plan; unsafe abstains')
 
 

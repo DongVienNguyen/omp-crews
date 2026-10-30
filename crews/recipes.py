@@ -23,6 +23,21 @@ import shlex
 import sqlite3
 import time
 import uuid
+from contextlib import contextmanager
+from threading import RLock
+
+_EVIDENCE_LOCK=RLock()
+
+
+@contextmanager
+def evidence_lock(state=None):
+    from crews.egress import _flock
+    folder=Path(state) if state is not None else learning._root()
+    folder.mkdir(parents=True,exist_ok=True)
+    with _EVIDENCE_LOCK, (folder/'capability-evidence.lock').open('a+b') as handle:
+        _flock(handle.fileno(),exclusive=True)
+        try:yield
+        finally:_flock(handle.fileno(),exclusive=False)
 
 from crews import learning
 from crews.omp_adapter import canonical, explicit_file, small_eligibility
@@ -58,6 +73,9 @@ CREATE TABLE IF NOT EXISTS recipe_v1_captures(
  id INTEGER PRIMARY KEY,project TEXT NOT NULL,recipe TEXT NOT NULL,run TEXT NOT NULL,
  producer TEXT NOT NULL,checker TEXT NOT NULL,proof TEXT NOT NULL,created REAL NOT NULL,
  UNIQUE(project,recipe,run,producer,checker));
+CREATE TABLE IF NOT EXISTS recipe_audit_deliveries(token TEXT PRIMARY KEY,recipe TEXT NOT NULL,project TEXT NOT NULL,snapshot TEXT NOT NULL,role_hash TEXT NOT NULL,state TEXT NOT NULL,run TEXT,role TEXT,created REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS recipe_source_groups(project TEXT NOT NULL,source_group TEXT NOT NULL,unit TEXT NOT NULL,split TEXT NOT NULL,PRIMARY KEY(project,source_group));
+INSERT OR IGNORE INTO recipe_source_groups SELECT r.project,coalesce(json_extract(e.proof,'$.source_group'),e.unit),e.unit,e.split FROM recipe_v1_evidence e JOIN recipe_v1_recipes r ON r.id=e.recipe;
 """
 
 
@@ -121,10 +139,11 @@ def _profile_hash(recipe, project):
     return _hash(checker)
 
 
-def _recipe(value, project):
+def _recipe(value, project, state=None):
     required = {'features', 'version', 'cue', 'lesson', 'evidence', 'negative_examples',
                 'applicability', 'exclusions', 'profile', 'recipe_steps', 'max_difficulty', 'model_binding'}
-    if not isinstance(value, dict) or set(value) != required:
+    optional = {'frontier','version_strategy'}
+    if not isinstance(value, dict) or not required<=set(value) or set(value)-required-optional:
         raise ValueError('recipe: strict structured recipe fields required')
     result = dict(value)
     result['features'] = _features(value['features'])
@@ -148,6 +167,16 @@ def _recipe(value, project):
         raise ValueError('max_difficulty: finite number from 0 to 1.5 required')
     result['profile'], profile_hash = _profile(value['profile'], project)
     result['model_binding'] = _binding(value['model_binding'])
+    if 'frontier' in value:
+        from crews.capability_trials import FRONTIER
+        if value['frontier']!=FRONTIER:raise ValueError('unsupported experimental frontier')
+        strategy=value.get('version_strategy')
+        if not isinstance(strategy,dict) or set(strategy)!={'kind','identity','expires','policy_binding'} or strategy['kind'] not in ('provider_revision','operator_deployment') or not isinstance(strategy['identity'],str) or not strategy['identity'].strip() or type(strategy['expires']) not in (int,float) or not time.time()<strategy['expires']<=time.time()+90*86400:raise ValueError('reviewed finite model version strategy required')
+        from crews.omp_adapter import policy_binding
+        if strategy['policy_binding']!=policy_binding(state):raise ValueError('version strategy model/config drift')
+        from crews.capability_trials import deployment_digest
+        result['_deployment_digest']=deployment_digest(state)
+    elif 'version_strategy' in value:raise ValueError('version strategy requires explicit frontier')
     return result, profile_hash
 
 
@@ -189,6 +218,8 @@ def _stats(db, row):
     failures += db.execute("SELECT count(*) FROM recipe_v1_events WHERE recipe=? AND operation='conflict'", (row['id'],)).fetchone()[0]
     failures += db.execute("SELECT count(*) FROM recipe_v1_events WHERE recipe=? AND operation='suspended' AND detail LIKE '%behavioral audit failed%'", (row['id'],)).fetchone()[0]
     failures += db.execute("SELECT count(*) FROM recipe_v1_events WHERE recipe=? AND operation='suspended' AND detail LIKE '%captured independent behavior failure%'", (row['id'],)).fetchone()[0]
+    conflicts=db.execute("SELECT count(*) FROM (SELECT coalesce(json_extract(proof,'$.source_group'),unit) AS g FROM recipe_v1_evidence WHERE recipe=? GROUP BY g HAVING count(DISTINCT unit)>1 OR count(DISTINCT split)>1)",(row['id'],)).fetchone()[0]
+    failures+=conflicts
     known = train + holdout + failures
     return {'train': train, 'holdout': holdout, 'failures': failures,
             'unknown': sum(r['behavior'] == 'unknown' for r in rows) + db.execute("SELECT count(*) FROM recipe_v1_events WHERE recipe=? AND operation='suspended' AND detail LIKE '%captured independent outcome unknown%'",(row['id'],)).fetchone()[0],
@@ -198,17 +229,16 @@ def _stats(db, row):
 def _proof(reference, project, state, recipe, profile_hash, audit=False):
     if not isinstance(reference, dict):
         raise ValueError('evidence reference: object required')
-    names = ('run', 'producer', 'checker')
-    refs = [_text(reference.get(name), name) for name in names]
-    if refs[1] == refs[2]:
-        raise ValueError('independent checker required')
-    try:
-        from crews.outcomes import verified_pair
-    except ImportError as error:
-        raise ValueError('authoritative outcomes.verified_pair unavailable') from error
+    from crews.outcomes import verified_pair, verified_reference
     evidence_project=canonical(reference.get('project',project))
     if not Path(evidence_project).resolve().is_relative_to(Path(project).resolve()):raise ValueError('evidence project must be caller project or isolated child snapshot')
-    proof = verified_pair(*refs, evidence_project, state)
+    if reference.get('reference'):
+        proof=verified_reference(reference['reference'],evidence_project,state)
+        p=proof['reference']['producer'];c=proof['reference']['checker'];refs=[p['run'],p['role'],c]
+    else:
+        refs=[_text(reference.get('run'),'run'),_text(reference.get('producer'),'producer'),reference.get('checker')]
+        if not isinstance(refs[2],(str,dict)):raise ValueError('checker reference required')
+        proof=verified_pair(*refs,evidence_project,state)
     required = {'verified', 'behavior', 'unit_hash', 'artifacts', 'profile_hash', 'model_binding', 'execution'}
     if not isinstance(proof, dict) or not required <= set(proof) or type(proof['verified']) is not bool:
         raise ValueError('authoritative evidence missing proof fields')
@@ -228,6 +258,10 @@ def _proof(reference, project, state, recipe, profile_hash, audit=False):
     if not isinstance(proof['artifacts'], (dict, list)):
         raise ValueError('authoritative artifacts required')
     _binding(proof['model_binding'])
+    if proof.get('combo') is not None and proof['combo']!='Small':raise ValueError('Medium proof is opportunity only, never Small competence')
+    if recipe.get('frontier'):
+        strategy=recipe['version_strategy']
+        if proof.get('model_revision')!=strategy['identity'] or time.time()>=strategy['expires']:raise ValueError('frontier model revision unknown or expired')
     proof={**proof,'run':refs[0],'producer':refs[1],'checker':refs[2]}
     # Drift is returned to caller so suspension commits, not rolled back by error.
     mismatch = proof['profile_hash'] != profile_hash or proof['model_binding'] != recipe['model_binding']
@@ -250,8 +284,12 @@ def _safe(role, roles, recipe, project):
     if isinstance(difficulty, bool) or not isinstance(difficulty, (int, float)) or not 0 <= difficulty <= recipe['max_difficulty']:
         blockers.append('difficulty')
     # Existing route validator owns scope, independent checker and command rules.
-    checked = small_eligibility(role, project, roles, routine=True)
-    blockers.extend(checked['blockers'])
+    if recipe.get('frontier'):
+        from crews.capability_trials import eligible
+        blockers.extend(eligible(role,roles,project))
+    else:
+        checked = small_eligibility(role, project, roles, routine=True)
+        blockers.extend(checked['blockers'])
     checker = next((item for item in roles or [] if item.get('name') == role.get('routine_check')), None)
     profile = recipe['profile']
     writers = [item for item in roles or [] if item.get('kind') in ('produce', 'integrate')]
@@ -291,6 +329,14 @@ def _lookup(db, project, p, state):
     # Never fall back to older versions after drift/rollback of newest version.
     row = rows[0]
     recipe = json.loads(row['body'])
+    if recipe.get('frontier'):
+        strategy=recipe['version_strategy']
+        from crews.omp_adapter import policy_binding
+        from crews.capability_trials import deployment_digest
+        if time.time()>=strategy['expires'] or strategy['policy_binding']!=policy_binding(state) or role.get('model_revision')!=strategy['identity'] or recipe.get('_deployment_digest')!=deployment_digest(state):
+            if p.get('confirmed') is True:_state(db,row,'suspended','version strategy drift')
+            result['reason']='version_strategy_drift'
+            return result
     if time.time()>=recipe.get('_expires_at',0):
         if p.get('confirmed') is True:_state(db,row,'suspended','recipe validity expired')
         result['reason']='expired'
@@ -330,7 +376,13 @@ def _lookup(db, project, p, state):
         return result
     result['approved_recipe'] = {'recipe_id': row['id'], **recipe, 'profile_hash': row['profile_hash']}
     if row['audit_pending']:
-        result['reason'] = 'fresh_behavioral_audit_required'
+        pending=db.execute("SELECT state,created FROM recipe_audit_deliveries WHERE recipe=? AND state IN ('reserved','admitted') ORDER BY created DESC LIMIT 1",(row['id'],)).fetchone()
+        if pending and time.time()-pending['created']>3600:
+            if p.get('confirmed') is True:
+                db.execute("UPDATE recipe_audit_deliveries SET state='expired' WHERE recipe=? AND state IN ('reserved','admitted')",(row['id'],))
+                _state(db,row,'suspended','audit delivery expired')
+            result['reason']='audit_delivery_expired'
+        else:result['reason'] = 'fresh_behavioral_audit_required'
         return result
     if p.get('confirmed') is not True:
         result['reason'] = 'explicit_hit_reservation_required'
@@ -338,10 +390,19 @@ def _lookup(db, project, p, state):
     hits = row['hits'] + 1
     from crews.automation import audit_interval
     due = hits % audit_interval(project,state) == 0
+    token=None
+    if due:
+        if not row['consent']:
+            result['reason']='audit_delivery_consent_required'
+            return result
+        from crews.outcomes import fingerprints
+        token=uuid.uuid4().hex
+        snapshot=fingerprints(project,list(dict.fromkeys((role.get('inputs') or [])+(role.get('scope') or [])+[recipe['profile']['input']])))
+        db.execute('INSERT INTO recipe_audit_deliveries VALUES(?,?,?,?,?,?,?,?,?)',(token,row['id'],project,_json(snapshot),_hash(role),'reserved',None,None,time.time()))
     db.execute('UPDATE recipe_v1_recipes SET hits=?,audit_pending=? WHERE id=?', (hits, int(due), row['id']))
-    _event(db, project, row['id'], 'hit', {'hits': hits, 'audit_due': due})
-    result.update(match=not due, effective_small=not due, audit_due=due,
-                  reason='fresh_behavioral_audit_required' if due else 'approved')
+    _event(db, project, row['id'], 'audit_delivery' if due else 'hit', {'hits': hits, 'audit_due': due})
+    result.update(match=True,effective_small=True,audit_due=due,audit_delivery_token=token,
+                  reason='checked_audit_delivery' if due else 'approved')
     return result
 
 
@@ -400,6 +461,7 @@ def _evidence(db, row, p, project, state, audit=False):
         raise ValueError('machine evidence requires explicit registered profile consent')
     recipe = json.loads(row['body'])
     proof, mismatch = _proof(p, project, state, recipe, row['profile_hash'], audit=audit)
+    _check_holdout(project,proof,state)
     try:
         mismatch = mismatch or _profile_hash(recipe, project) != row['profile_hash']
     except (ValueError, OSError):
@@ -411,6 +473,9 @@ def _evidence(db, row, p, project, state, audit=False):
     if split not in ('train', 'holdout'):
         raise ValueError('split: train or holdout required')
     unit = proof['unit_hash']
+    group=proof.get('source_group',unit)
+    grouped=db.execute('SELECT unit,split FROM recipe_source_groups WHERE project=? AND source_group=?',(project,group)).fetchone()
+    if grouped and (grouped['split']!=split or grouped['unit']!=unit):raise ValueError('independent source group cannot cross train/holdout or count multiple units')
     prior_unit = db.execute('SELECT split FROM recipe_v1_units WHERE project=? AND unit=?', (project, unit)).fetchone()
     if prior_unit and prior_unit[0] != split:
         raise ValueError('independent unit cannot cross train/holdout split')
@@ -424,12 +489,12 @@ def _evidence(db, row, p, project, state, audit=False):
     if audit and (row['state'] != 'active' or not row['audit_pending']):
         raise ValueError('audit requires active recipe with pending audit')
     if audit:
+        _complete_delivery(db,row,proof,project,state)
         db.execute('INSERT INTO recipe_v1_units VALUES(?,?,?)',(project,unit,'audit_only'))
-        _event(db,project,row['id'],'behavioral_audit',{'unit':unit,'proof':proof})
-        if proof['behavior']=='pass':db.execute('UPDATE recipe_v1_recipes SET audit_pending=0,audits=audits+1 WHERE id=?',(row['id'],))
-        elif proof['behavior']=='fail':_state(db,row,'suspended','independent behavioral audit failed')
-        return {'accepted':True,'state':_row(db,project,row['id'])['state'],'audit_cleared':proof['behavior']=='pass',**_stats(db,row)}
-    db.execute('INSERT OR IGNORE INTO recipe_v1_units VALUES(?,?,?)', (project, unit, split))
+        db.execute('INSERT OR IGNORE INTO recipe_source_groups VALUES(?,?,?,?)',(project,group,unit,'audit_only'))
+        return {'accepted':True,'state':_row(db,project,row['id'])['state'],'audit_cleared':proof['verified'] and proof['behavior']=='pass',**_stats(db,row)}
+    db.execute('INSERT OR IGNORE INTO recipe_v1_units VALUES(?,?,?)',(project,unit,split))
+    db.execute('INSERT OR IGNORE INTO recipe_source_groups VALUES(?,?,?,?)',(project,group,unit,split))
     db.execute('INSERT INTO recipe_v1_evidence VALUES(?,?,?,?,?,?,?,?)',
                (uuid.uuid4().hex, row['id'], unit, split, proof['behavior'], _json(proof), 'independent_checker', time.time()))
     _event(db, project, row['id'], 'audit' if audit else 'evidence', {'unit': unit, 'behavior': proof['behavior']})
@@ -448,6 +513,7 @@ def _evidence(db, row, p, project, state, audit=False):
 
 
 def _probe(db, row, p, project, state):
+    if p.get('comparison')=='capability' or p.get('baseline_combo')=='Medium':raise ValueError('Medium-vs-Small unsupported by recipe probe; use capability_comparison version 1')
     budget = _config(db, project)['probe_budget']
     if not budget or not row['consent']:
         raise ValueError('probe requires explicit registered profile consent and approved budget')
@@ -540,7 +606,7 @@ def _dispatch(db, p, project, state):
         _event(db, project, None, op, config)
         return config
     if op == 'register':
-        recipe, profile_hash = _recipe(p.get('recipe'), project)
+        recipe, profile_hash = _recipe(p.get('recipe'), project, state)
         # Registration also requires current complete writer/checker context.
         role = p.get('role')
         if not isinstance(role, dict):
@@ -589,6 +655,10 @@ def _dispatch(db, p, project, state):
 
 
 def capture(run,producer,checker,project,state=None):
+    with evidence_lock(state):return _capture(run,producer,checker,project,state)
+
+
+def _capture(run,producer,checker,project,state=None):
     """Collect authoritative outcomes for consented profiles, not a training label."""
     from crews.outcomes import verified_pair
     root=Path(state) if state is not None else learning._root();target=root/'learning.sqlite'
@@ -600,6 +670,7 @@ def capture(run,producer,checker,project,state=None):
         db.executescript(_SCHEMA);count=0
         db.execute('BEGIN IMMEDIATE')
         rows=db.execute('SELECT * FROM recipe_v1_recipes WHERE project=? AND consent=1',(canonical(project),)).fetchall()
+        _check_holdout(project,proof,root)
         for row in rows:
             body=json.loads(row['body'])
             if time.time()>=body.get('_expires_at',0):continue
@@ -607,8 +678,11 @@ def capture(run,producer,checker,project,state=None):
             with db:
                 if not db.in_transaction:db.execute('BEGIN IMMEDIATE')
                 row=_row(db,canonical(project),row['id'])
-                changed=db.execute('INSERT OR IGNORE INTO recipe_v1_captures(project,recipe,run,producer,checker,proof,created) VALUES(?,?,?,?,?,?,?)',(canonical(project),row['id'],run,producer,checker,_json(proof),time.time()))
+                identity=__import__('crews.outcomes',fromlist=['digest']).digest(proof.get('reference') or dict(run=run,producer=producer,checker=checker))
+                changed=db.execute('INSERT OR IGNORE INTO recipe_v1_captures(project,recipe,run,producer,checker,proof,created) VALUES(?,?,?,?,?,?,?)',(canonical(project),row['id'],run,producer,identity,_json(proof),time.time()))
                 count+=changed.rowcount
+                if changed.rowcount and proof['learned'] and row['audit_pending']:
+                    _complete_delivery(db,row,proof,canonical(project),root)
                 config=_config(db,canonical(project))
                 delegated_scope=True
                 if config.get('delegation_id'):
@@ -617,11 +691,13 @@ def capture(run,producer,checker,project,state=None):
                         _,limits=live(db,config['delegation_id'],canonical(project),root)
                         delegated_scope=body.get('_delegation_id')==config['delegation_id'] and body['max_difficulty']<=limits['max_difficulty']
                     except (ValueError,OSError):delegated_scope=False
-                if config.get('auto_evidence') and delegated_scope and _delegation_live(db,canonical(project),root) and not row['audit_pending'] and proof['verified'] and not proof['learned']:
+                if config.get('auto_evidence') and delegated_scope and _delegation_live(db,canonical(project),root) and not row['audit_pending'] and proof['verified'] and not proof['learned'] and proof.get('combo','Small')=='Small' and (not body.get('frontier') or proof.get('model_revision')==body['version_strategy']['identity'] and time.time()<body['version_strategy']['expires']):
                     unit=proof['unit_hash'];split='holdout' if int(unit[:8],16)%5==0 else 'train'
                     prior=db.execute('SELECT split FROM recipe_v1_units WHERE project=? AND unit=?',(canonical(project),unit)).fetchone()
+                    grouped=db.execute('SELECT unit,split FROM recipe_source_groups WHERE project=? AND source_group=?',(canonical(project),proof.get('source_group',unit))).fetchone()
                     existing=db.execute('SELECT 1 FROM recipe_v1_evidence WHERE recipe=? AND unit=?',(row['id'],unit)).fetchone()
-                    if not existing and (not prior or prior[0]==split):
+                    if not existing and (not prior or prior[0]==split) and (not grouped or grouped['unit']==unit and grouped['split']==split):
+                        db.execute('INSERT OR IGNORE INTO recipe_source_groups VALUES(?,?,?,?)',(canonical(project),proof.get('source_group',unit),unit,split))
                         db.execute('INSERT OR IGNORE INTO recipe_v1_units VALUES(?,?,?)',(canonical(project),unit,split))
                         db.execute('INSERT INTO recipe_v1_evidence VALUES(?,?,?,?,?,?,?,?)',(uuid.uuid4().hex,row['id'],unit,split,proof['behavior'],_json({**proof,'run':run,'producer':producer,'checker':checker}),'independent_checker',time.time()))
                         stats=_stats(db,row)
@@ -633,6 +709,12 @@ def capture(run,producer,checker,project,state=None):
         return {'captured':count,'label_created':False}
 
 def dispatch(request, project, state=None):
+    if isinstance(request,dict) and request.get('operation',request.get('op')) in ('evidence','audit','probe'):
+        with evidence_lock(state):return _dispatch_request(request,project,state)
+    return _dispatch_request(request,project,state)
+
+
+def _dispatch_request(request, project, state=None):
     """Execute exactly one requested operation; no background capture or execution."""
     if not isinstance(request, dict):
         raise ValueError('recipe request: object required')
@@ -688,3 +770,74 @@ def match(role, project, roles=None, state=None):
     if not isinstance(role, dict) or role.get('recipe_features') is None:
         return {'match': False, 'effective_small': False, 'candidate': None, 'approved_recipe': None, 'reason': 'no_features'}
     return dispatch({'operation': 'lookup', 'role': role, 'roles': roles}, project, state)
+
+
+def admit_delivery(cell,run,project,state):
+    token=cell.get('audit_delivery_token')
+    if not token:return
+    from crews.automation import database
+    from crews.outcomes import fingerprints
+    with database(state) as db:
+        row=db.execute('SELECT * FROM recipe_audit_deliveries WHERE token=? AND project=?',(token,project)).fetchone()
+        if not row or row['state']!='reserved' or row['recipe']!=cell.get('recipe_id') or cell['policy_combo']!='Small':raise ValueError('audit delivery consumed or wrong binding')
+        expected=json.loads(row['snapshot'])
+        if fingerprints(project,list(expected))!=expected:raise ValueError('audit delivery snapshot stale')
+        if time.time()-row['created']>3600:raise ValueError('audit delivery expired')
+        db.execute("UPDATE recipe_audit_deliveries SET state='admitted',run=?,role=? WHERE token=? AND state='reserved'",(run,cell['role_id'],token))
+
+
+def _complete_delivery(db,row,proof,project,state):
+    reference=proof.get('reference',{}).get('producer',{})
+    delivery=db.execute("SELECT token FROM recipe_audit_deliveries WHERE recipe=? AND project=? AND run=? AND role=? AND state='admitted'",(row['id'],project,reference.get('run'),reference.get('role'))).fetchone()
+    if not delivery:raise ValueError('audit proof lacks admitted delivery token')
+    db.execute("UPDATE recipe_audit_deliveries SET state='completed' WHERE token=? AND state='admitted'",(delivery[0],))
+    if proof['verified'] and proof['behavior']=='pass':
+        db.execute('UPDATE recipe_v1_recipes SET audit_pending=0,audits=audits+1 WHERE id=?',(row['id'],))
+    else:_state(db,row,'suspended','audit delivery behavioral audit failed' if proof['behavior']=='fail' else 'audit delivery unknown')
+    _event(db,project,row['id'],'audit_only',dict(reference=proof['reference'],behavior=proof['behavior']))
+
+
+def failed_delivery(cell,project,state):
+    token=cell.get('audit_delivery_token')
+    if not token:return
+    from crews.automation import database
+    with database(state) as db:
+        row=db.execute("SELECT recipe FROM recipe_audit_deliveries WHERE token=? AND project=? AND state='admitted'",(token,project)).fetchone()
+        if not row:return
+        db.execute("UPDATE recipe_audit_deliveries SET state='suspended' WHERE token=?",(token,))
+        _state(db,_row(db,project,row['recipe']),'suspended','audit producer failed or cancelled')
+
+
+def _check_holdout(project,proof,state):
+    from contextlib import closing
+    target=Path(state)/'runs.sqlite'
+    if not target.is_file():return
+    with closing(sqlite3.connect(target.resolve().as_uri()+'?mode=ro',uri=True)) as db:
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='capability_holdouts'").fetchone():
+            for owner, in db.execute('SELECT project FROM capability_holdouts WHERE source_group=?',(proof.get('source_group',proof['unit_hash']),)):
+                left,right=Path(canonical(project)),Path(owner)
+                if left==right or left.is_relative_to(right) or right.is_relative_to(left):raise ValueError('comparison holdout cannot train recipe competence')
+        before=(proof.get('execution') or {}).get('before_hash')
+        if before and db.execute("SELECT 1 FROM sqlite_master WHERE name='capability_content_holdouts'").fetchone():
+            for owner, in db.execute('SELECT project FROM capability_content_holdouts WHERE before_hash=?',(before,)):
+                left,right=Path(canonical(project)),Path(owner)
+                if left==right or left.is_relative_to(right) or right.is_relative_to(left):raise ValueError('comparison content holdout cannot train recipe competence')
+
+
+def failed_checker(cell,project,state):
+    from crews import omp_adapter as a
+    targets=[dict(run=cell.get('_run'),role=name) for name in cell.get('verify_targets') or []]+list(cell.get('workflow_targets') or [])
+    with a.database(state) as runs:
+        pairs=[]
+        for target in targets:
+            row=runs.execute('SELECT plan FROM runs WHERE id=? AND project=?',(target['run'],canonical(project))).fetchone()
+            if not row:continue
+            writer=next((c for w in json.loads(row[0])['waves'] for c in w['calls'] if c['role_id']==target['role']),None)
+            if writer and writer.get('audit_delivery_token'):pairs.append((target,writer))
+    from crews.automation import database
+    with database(state) as db:
+        for target,writer in pairs:
+            row=db.execute("SELECT recipe FROM recipe_audit_deliveries WHERE token=? AND project=? AND run=? AND role=? AND state='admitted'",(writer['audit_delivery_token'],canonical(project),target['run'],target['role'])).fetchone()
+            if row:
+                db.execute("UPDATE recipe_audit_deliveries SET state='suspended' WHERE token=?",(writer['audit_delivery_token'],))
+                _state(db,_row(db,canonical(project),row['recipe']),'suspended','audit delivery unknown: recorded checker failure')

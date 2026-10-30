@@ -30,6 +30,7 @@ try {
     console.log('\nAdaptive: recipes status|lookup|register|evidence|activate|audit|rollback|configure|probe --project PATH [--request JSON_FILE] [--yes]\nRecovery: recover --project PATH --request JSON_FILE --yes (dead admitted dispatch owner only)');
     console.log('\nAutomation: automation enable|disable|status|export|import --project PATH [--request JSON_FILE] [--yes]\nSetup enables keyless local policy governance. Export JSON to external AI; edit proposal only; import queues Large review, never direct apply.');
     console.log('\nWorkflow: workflow prepare|status|next|recheck|recover|attempts|evaluation --project PATH --request JSON_FILE [--yes]\nDefault sdlc_cost_aware for fresh workflows; explicit baseline opts out. Native crew_workflow returns admitted task crew references; never replay.');
+    console.log('\nCapability: workflow opportunities|capability_trial|capability_comparison --project PATH --request JSON_FILE [--yes]\nVersion1 wrapper {version:1,operation,request}. Opportunity review/trial prepare/comparison freeze require operator signature. No automatic activation or monetary claim.');
     return;
   }
   const action = ['combo','learning','storage','recipes','automation','workflow'].includes(command) && args[0] && !args[0].startsWith('--') ? args.shift() : ['learning','storage','recipes','automation','workflow'].includes(command) ? 'status' : 'show';
@@ -223,12 +224,12 @@ function adaptiveCommand(command,operation){
  if(command==='automation'&&!['enable','disable','export','import','grant','revoke','status'].includes(operation))throw Error('Automation operation must be enable/disable/export/import/status');
  if(['recipes','automation'].includes(command))request.operation=operation;
  if(command==='workflow'){
-  if(!['prepare','status','next','recheck','recover','attempts','evaluation'].includes(operation))throw Error('Workflow operation invalid');
+  if(!['prepare','status','next','recheck','recover','attempts','evaluation','capability_trial','capability_comparison','opportunities'].includes(operation))throw Error('Workflow operation invalid');
   request.operation=['prepare','status','next','recheck','recover'].includes(operation)?'workflow_'+operation:operation;
  }
- const readOnly=!options.yes&&(command==='recipes'&&['lookup','status','report'].includes(operation)||command==='automation'&&['status','export'].includes(operation)||command==='workflow'&&['status','attempts','evaluation'].includes(operation));
+ const readOnly=!options.yes&&(command==='recipes'&&['lookup','status','report'].includes(operation)||command==='automation'&&['status','export'].includes(operation)||command==='workflow'&&['status','attempts','evaluation','opportunities'].includes(operation));
  if(!readOnly&&!options.yes)throw Error('Adaptive mutation requires --yes');
- request.confirmed=options.yes===true;
+ if(command==='workflow'&&['capability_trial','capability_comparison','opportunities'].includes(operation)){request.version=1;}else request.confirmed=options.yes===true;
  const loc=locations(),python=readJSON(loc.runtime).python||options.python;
  if(!python)throw Error('Provision isolated runtime before adaptive commands');
  const input=command==='recipes'?{op:'recipes',args:request,project:path.resolve(options.project)}:['account','automation','workflow'].includes(command)?{op:command,request,project:path.resolve(options.project)}:{...request,op:'recover',project:path.resolve(options.project)};

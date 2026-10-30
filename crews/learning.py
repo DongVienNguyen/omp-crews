@@ -232,21 +232,15 @@ def _receipt(db, ph, project, row):
             not isinstance(evidence, list) or not evidence or
             any(not isinstance(v, str) or not v.strip() for v in evidence)):
         raise ValueError('feedback requires valid native exit 0 and verified completion')
-    if (wire.get('model') != cell['model'] or wire.get('effort') != cell['reasoning_effort'] or
-            wire.get('provider') != cell['provider'] or
-            native.get('resolvedThinkingLevel', cell['reasoning_effort']) != cell['reasoning_effort'] or
-            native.get('resolvedModel', cell['model']) not in (cell['model'], cell['provider'] + '/' + cell['model'])):
+    from crews.outcomes import model_proof, fingerprints as current_fingerprints
+    if not model_proof(cell, result):
         raise ValueError('feedback model/effort receipt mismatch')
     fingerprints = result.get('fingerprints')
     scopes = set(cell.get('write_scope', []) + cell.get('read_scope', []))
     if not isinstance(fingerprints, dict) or set(fingerprints) != scopes:
         raise ValueError('feedback missing scope fingerprints')
-    for name, expected in fingerprints.items():
-        scope_path(project, name)
-        target = Path(project) / name
-        actual = hashlib.sha256(target.read_bytes()).hexdigest() if target.is_file() else None
-        if actual != expected:
-            raise ValueError('feedback evidence stale: ' + name)
+    if current_fingerprints(project, list(fingerprints)) != fingerprints:
+        raise ValueError('feedback evidence stale')
     oid = cell.get('classification', {}).get('learning', {}).get('observation_id')
     obs = _observation(db, ph, oid)
     if json.loads(obs['metrics']).get('source') not in SOURCES - {'learned'}:

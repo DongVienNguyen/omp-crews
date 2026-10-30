@@ -24,7 +24,7 @@ class ClassificationFacts(BaseModel):
 
 Stage = Literal['discovery', 'architecture', 'scaffolding', 'implementation', 'verification', 'optimization', 'closure']
 NonemptyText = Annotated[str, Field(strict=True, min_length=1, pattern=r'\S')]
-HOST_FIELDS = frozenset({'workflow_id', 'node_id', 'logical_issue', 'local_policy_snapshot', 'automation_governance'})
+HOST_FIELDS = frozenset({'host_binding', 'host_binding_digest', 'host_tools', 'workflow_id', 'node_id', 'logical_issue', 'local_policy_snapshot', 'automation_governance', 'trial_id', 'trial_run', 'audit_delivery_token', 'workflow_targets', 'source_group'})
 
 
 class RiskFacts(BaseModel):
@@ -83,6 +83,7 @@ def policy_version():
     from pathlib import Path
     root = Path(__file__).resolve().parent
     sources = ['classification.py', 'omp_adapter.py', 'planner.py', 'budget.py', 'learning.py', 'outcomes.py', 'recipes.py', 'shaping.py', 'approval.py', 'accounting.py', 'evaluation.py', 'runner.py', 'automation.py', 'governance.py', 'portable_rules.py', 'workflow.py', 'context_packets.py', 'attempt_ledger.py', 'workflow_evaluation.py']
+    sources += ['capability_trials.py', 'opportunities.py', 'sdlc_api.py']
     from crews.omp_adapter import model_policy
     payload = {'catalog': catalog.load(), 'rubric': RUBRIC, 'model_policy':model_policy(),
                'sources': {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sources}}

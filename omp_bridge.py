@@ -52,6 +52,8 @@ def main():
  methods.update(automation=automation,automation_next=automation_next,automation_finish=automation_finish,automation_schema=automation_schema,automation_ensure=automation_ensure)
  methods.update(context_schema=context_schema)
  methods.update(workflow=workflow)
+ methods.update(capability=workflow)
+ methods.update(attach_host_binding=a.attach_host_binding)
  if op not in methods:raise ValueError('unknown operation')
  print(json.dumps(methods[op](**p),ensure_ascii=False))
 if __name__=='__main__':

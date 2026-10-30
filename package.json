@@ -9,12 +9,12 @@
   "files": [
     "bin/*.mjs", "extension.ts", "runtime-paths.mjs", "bridge-client.mjs",
     "routing-policy.mjs", "routing-evidence.mjs", "result-policy.mjs", "classifier.mjs", "adaptive-classifier.mjs", "shadow-sampling.mjs", "learning-editor.mjs", "recipe-editor.mjs", "write-scope.mjs", "combo-editor.mjs",
-    "rule-editor.mjs",
+    "rule-editor.mjs", "host-binding.mjs",
     "omp_bridge.py", "omp_server.py", "crews/*.py", "crews/*.json",
     "requirements-omp.lock", "legacy-owned.json", "agents/*.md", "skills/crew-omp/SKILL.md", "LICENSE", "NOTICE",
     "examples/*.json", "check_*.py", "check_*.mjs", "approval_fixture.py", "tests/*.mjs", "tests/*.ts", "tests/*.json", "tests/*.py", "VERIFICATION.md",
-    "docs/*.md", "plans/20261028-sdlc-micro-loops/benchmark/*.py"
+    "docs/*.md", "plans/20261028-sdlc-micro-loops/benchmark/*.py", "plans/261029-0221-small-routing-learning-repair/*.md"
   ],
   "omp": { "extensions": ["./extension.ts"] },
-  "scripts": { "test:packaging": "node --test tests/packaging.test.mjs" }
+  "scripts": { "test:packaging": "node --test tests/packaging.test.mjs", "test:small-learning": "python -B check_small_learning.py" }
 }

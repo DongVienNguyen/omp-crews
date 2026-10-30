@@ -15,6 +15,9 @@ def _schema(db):
     db.execute('CREATE TABLE IF NOT EXISTS workflows(id TEXT PRIMARY KEY,project TEXT NOT NULL,slot TEXT NOT NULL,session TEXT NOT NULL,identity TEXT NOT NULL,logical_identity TEXT NOT NULL,manifest TEXT NOT NULL,used INTEGER NOT NULL DEFAULT 0,repairs INTEGER NOT NULL DEFAULT 0,escalations INTEGER NOT NULL DEFAULT 0,created REAL NOT NULL,UNIQUE(project,slot))')
     db.execute('CREATE TABLE IF NOT EXISTS workflow_nodes(workflow TEXT NOT NULL,node TEXT NOT NULL,state TEXT NOT NULL,run TEXT UNIQUE,cells INTEGER NOT NULL,PRIMARY KEY(workflow,node))')
     db.execute('CREATE TABLE IF NOT EXISTS workflow_reservations(workflow TEXT,node TEXT,owner INTEGER,created REAL,PRIMARY KEY(workflow,node))')
+    db.execute('CREATE TABLE IF NOT EXISTS workflow_adoptions(workflow TEXT PRIMARY KEY,previous_manifest TEXT NOT NULL,current_policy TEXT NOT NULL,current_sources TEXT NOT NULL,adopted_at REAL NOT NULL)')
+    db.execute("CREATE TRIGGER IF NOT EXISTS workflow_adoptions_no_update BEFORE UPDATE ON workflow_adoptions BEGIN SELECT RAISE(ABORT,'adoption history immutable'); END")
+    db.execute("CREATE TRIGGER IF NOT EXISTS workflow_adoptions_no_delete BEFORE DELETE ON workflow_adoptions BEGIN SELECT RAISE(ABORT,'adoption history immutable'); END")
 
 
 def _paths(value, project, label):
@@ -158,6 +161,30 @@ def _validate(spec, project):
             profile = role.get('checker_profile')
             if profile and any(_overlap(project, profile['input'], p) for _, writer in writers for p in writer.get('scope') or []):
                 raise ValueError('workflow checker oracle is writable')
+    context = [role for node in nodes for role in node['roles']]
+    from crews.omp_adapter import small_eligibility
+    from crews.outcomes import profile
+    for node in nodes:
+        for role in node['roles']:
+            if not role.get('routine_check'):
+                continue
+            matches = [(n, r) for n in nodes for r in n['roles'] if r['name'] == role['routine_check']]
+            if len(matches) != 1:
+                raise ValueError('routine_check requires unique workflow role identity')
+            checker_node, checker = matches[0]
+            if checker_node['id'] == node['id']:
+                raw, _ = planner.build(catalog.load(), node['answers'], dict(task=spec['task'], roles=node['roles']), 'workflow-validation')
+                positions = {c['role']: i for i, wave in enumerate(raw['waves']) for c in wave['calls']}
+                if positions[checker['name']] <= positions[role['name']]:
+                    raise ValueError('routine_check must be in later wave')
+            if checker_node['id'] != node['id'] and node['id'] not in ancestors[checker_node['id']]:
+                raise ValueError('routine_check must be in later dependency node')
+            checked = small_eligibility(role, project, context, True)
+            invalid = [code for code in checked['blockers'] if code.startswith(('routine_check', 'role_context', 'invalid_routine', 'checker_', 'invalid_checker'))]
+            if invalid:
+                raise ValueError('routine_check: ' + ', '.join(invalid))
+            if not profile(checker, project, context):
+                raise ValueError('workflow routine checker requires immutable executable profile')
     if sum(counts.values()) > spec['max_calls']:
         raise ValueError('workflow budget cannot cover actual planned cells')
     return spec, counts, acceptance, final_checks
@@ -302,6 +329,78 @@ def reserve_attempt(db, cell, kind):
                 db.execute("UPDATE workflow_nodes SET state='invalidated' WHERE workflow=? AND node=?",(manifest['id'],node['id']))
 
 
+def _route_snapshot(spec, project, state):
+    from crews import omp_adapter as a
+    context = [role for node in spec['nodes'] for role in node['roles']]
+    return {node['id']: {role['name']: list(a.effective_combo(role, state, project, context)) for role in node['roles']} for node in spec['nodes']}
+
+def _installation_id(state):
+    from crews.governance import installation
+    value = installation(state)
+    return value['identity'] if value else None
+
+def _recover_snapshot(db, manifest, project, state, expected, adoption=None):
+    """Explicit CAS refresh for wholly unexecuted work; never replay or reclassify."""
+    from crews import omp_adapter as a
+    current = _policy(project, state)
+    sources = _sources(project, manifest['spec'])
+    actual = dict(old_policy=digest(manifest['policy']), new_policy=digest(current), old_sources=digest(manifest['sources']), new_sources=digest(sources))
+    if not isinstance(expected, dict) or expected != actual:
+        raise ValueError('snapshot recovery requires exact old/new policy and source digests')
+    old = manifest['policy']
+    if old['model'] != current['model']:
+        raise ValueError('snapshot recovery cannot change model policy')
+    before, after = old.get('local'), current.get('local')
+    installed = manifest.get('installation_id') or (before or {}).get('installation_id')
+    routes = _route_snapshot(manifest['spec'], project, state)
+    legacy = not installed or not manifest.get('routes')
+    previous_manifest = json.dumps(manifest)
+    if adoption is not None:
+        if not legacy or not isinstance(adoption, dict) or set(adoption) != {'manifest', 'provenance_unknown'} or adoption.get('provenance_unknown') is not True or adoption.get('manifest') != digest(manifest):
+            raise ValueError('legacy adoption requires exact original manifest and unknown-provenance acknowledgement')
+        if db.execute('SELECT 1 FROM workflow_adoptions WHERE workflow=?', (manifest['id'],)).fetchone():
+            raise ValueError('legacy workflow already adopted')
+    if not after or after.get('installation_id') != _installation_id(state) or after.get('policy_binding') != current['model'] or (installed and installed != after['installation_id']) or (before and after['epoch'] < before['epoch']):
+        raise ValueError('snapshot recovery requires live same-installation policy renewal')
+    if legacy and adoption is None:
+        raise ValueError('legacy workflow requires explicit current-authority adoption')
+    if manifest.get('routes') and manifest['routes'] != routes:
+        raise ValueError('snapshot recovery requires unchanged frozen routes for every node')
+    _validate_artifacts(db, manifest)
+    if db.execute('SELECT repairs,escalations FROM workflows WHERE id=?', (manifest['id'],)).fetchone() != (0, 0):
+        raise ValueError('snapshot recovery cannot refresh retry history')
+    plans = []
+    for node, status, run in db.execute('SELECT node,state,run FROM workflow_nodes WHERE workflow=?', (manifest['id'],)):
+        if status not in ('pending', 'planned'):
+            raise ValueError('snapshot recovery requires wholly unexecuted workflow')
+        if run:
+            if db.execute('SELECT 1 FROM attempts WHERE run=? AND (repairs>0 OR escalations>0)', (run,)).fetchone() or db.execute('SELECT 1 FROM admissions WHERE run=?', (run,)).fetchone() or db.execute('SELECT 1 FROM tickets WHERE run=?', (run,)).fetchone():
+                raise ValueError('snapshot recovery cannot refresh admission or retry history')
+            if db.execute("SELECT 1 FROM calls WHERE run=? AND (status!='planned' OR result IS NOT NULL)", (run,)).fetchone() or db.execute('SELECT 1 FROM execution_attempts WHERE run=?', (run,)).fetchone():
+                raise ValueError('snapshot recovery cannot refresh executed or admitted roles')
+            raw = db.execute('SELECT plan FROM runs WHERE id=?', (run,)).fetchone()
+            if not raw:raise ValueError('snapshot recovery missing canonical run')
+            plans.append((run, json.loads(raw[0])))
+    for run, plan in plans:
+        for wave in plan['waves']:
+            for cell in wave['calls']:
+                node = next(n for n in manifest['spec']['nodes'] if n['id'] == cell['node_id'])
+                role = next(r for r in node['roles'] if r['name'] == cell['role_id'])
+                combo, model, effort = a.effective_combo(role, state, project, node['roles'])
+                if (combo, model, effort) != (cell['policy_combo'], cell['model'], cell['reasoning_effort']):
+                    raise ValueError('snapshot recovery cannot change effective role routing')
+    if adoption is not None:
+        db.execute('INSERT INTO workflow_adoptions VALUES(?,?,?,?,?)', (manifest['id'], previous_manifest, json.dumps(current), json.dumps(sources), time.time()))
+        manifest.update(installation_id=after['installation_id'], routes=routes, adoption=dict(provenance_unknown=True, previous_manifest=digest(json.loads(previous_manifest)), at=time.time()))
+    manifest.setdefault('snapshot_recoveries', []).append(actual | dict(at=time.time()))
+    manifest['policy'], manifest['sources'] = current, sources
+    for run, plan in plans:
+        for wave in plan['waves']:
+            for cell in wave['calls']:
+                cell.update(local_policy_snapshot=after, routing_policy_version=current['routing'], workflow_policy_snapshot=current, workflow_source_revision=digest(sources))
+        db.execute('UPDATE runs SET plan=? WHERE id=?', (json.dumps(plan), run))
+    db.execute('UPDATE workflows SET manifest=? WHERE id=?', (json.dumps(manifest), manifest['id']))
+
 def dispatch(request, project, state=None):
     from crews import omp_adapter as a
     project = a.canonical(project)
@@ -343,6 +442,7 @@ def dispatch(request, project, state=None):
                         raise ValueError('workflow unresolved identity cannot reset caps via new slot/session')
                 wid = uuid.uuid4().hex
                 manifest = dict(version=1, id=wid, project=project, session=session, slot=slot, spec=spec, profile=profile, policy=_policy(project, state), sources=_sources(project, spec), acceptance=acceptance, final_checks=final_checks)
+                manifest.update(installation_id=_installation_id(state), routes=_route_snapshot(spec, project, state))
                 import sys,platform
                 manifest.update(before=fingerprints(project,list(dict.fromkeys(spec['authority']['read']+spec['authority']['write']))),environment=dict(python=sys.version,platform=platform.platform()))
                 db.execute('INSERT INTO workflows(id,project,slot,session,identity,logical_identity,manifest,created) VALUES(?,?,?,?,?,?,?,?)', (wid, project, slot, session, identity, logical, json.dumps(manifest), time.time()))
@@ -363,7 +463,9 @@ def dispatch(request, project, state=None):
             if changed.rowcount!=1:raise ValueError('workflow total budget exhausted')
             db.execute("UPDATE calls SET status='planned',result=NULL WHERE run=?",(entry['run'],))
             db.execute("UPDATE workflow_nodes SET state='planned' WHERE workflow=? AND node=?",(manifest['id'],node['id']))
-        if op=='recover':
+        if op=='recover' and request.get('snapshot') is not None:
+            _recover_snapshot(db, manifest, project, state, request['snapshot'], request.get('adoption'))
+        elif op=='recover':
             from crews.outcomes import process_alive
             entry=db.execute('SELECT state,run,cells FROM workflow_nodes WHERE workflow=? AND node=?',(manifest['id'],request.get('node'))).fetchone()
             owner=db.execute('SELECT owner,created FROM workflow_reservations WHERE workflow=? AND node=?',(manifest['id'],request.get('node'))).fetchone()
@@ -383,7 +485,7 @@ def dispatch(request, project, state=None):
             else:
                 db.execute("UPDATE workflow_nodes SET state='pending' WHERE workflow=? AND node=?",(manifest['id'],request['node']))
                 db.execute('UPDATE workflows SET used=used-? WHERE id=?',(entry[2],manifest['id']))
-    if op != 'status':
+    if op != 'status' and not (op == 'recover' and request.get('snapshot') is not None):
         _advance(manifest, project, state)
     return _status(manifest, project, state)
 
@@ -425,7 +527,7 @@ def _advance(manifest, project, state):
             db.execute("UPDATE workflow_nodes SET state='reserved' WHERE workflow=? AND node=? AND state='pending'", (manifest['id'], node['id']))
             db.execute('INSERT OR REPLACE INTO workflow_reservations VALUES(?,?,?,?)',(manifest['id'],node['id'],os.getpid(),time.time()))
         # A crash anywhere after reservation deliberately requires host recovery. Never replay.
-        plan = a.prepare_plan(dict(task=manifest['spec']['task'], roles=node['roles']), node['answers'], project, manifest['session'], state)
+        plan = a.prepare_plan(dict(task=manifest['spec']['task'], roles=node['roles']), node['answers'], project, manifest['session'], state, [r for n in manifest['spec']['nodes'] for r in n['roles']])
         with a.database(state) as db:
             db.execute('BEGIN IMMEDIATE')
             _validate_frozen(manifest, project, state)
@@ -441,7 +543,7 @@ def _attach(db,manifest,node,plan,context):
         if not role or cell['write_scope']!=(role.get('scope') or []) or cell['commands']!=(role.get('commands') or []) or cell['role_answers']!=role['answers']:raise ValueError('orphan plan differs from frozen role contract')
         from crews.outcomes import profile as checker_profile
         reads=list(dict.fromkeys((role.get('inputs') or [])+(role.get('read_scope') or [])+(role.get('scope') or [])))
-        if cell['read_scope']!=reads or cell['acceptance']!=(role.get('acceptance') or role.get('criteria') or []) or cell.get('checker_profile')!=checker_profile(role,manifest['project'],node['roles']):raise ValueError('orphan plan differs from frozen read/check authority')
+        if cell['read_scope']!=reads or cell['acceptance']!=(role.get('acceptance') or role.get('criteria') or []) or cell.get('checker_profile')!=checker_profile(role,manifest['project'],[r for n in manifest['spec']['nodes'] for r in n['roles']]):raise ValueError('orphan plan differs from frozen read/check authority')
         cell.update(workflow_id=manifest['id'],node_id=node['id'],workflow_stage=node['stage'],workflow_max_calls=manifest['spec']['max_calls'],workflow_acceptance_hash=digest(manifest['acceptance']),workflow_invariants=manifest['spec']['invariants'],workflow_source_revision=digest(manifest['sources']),workflow_profile=manifest['profile'],workflow_policy_snapshot=manifest['policy'])
         if cell['agent_type'].startswith('crew-check-'):
             cell['workflow_targets']=[];pending=list(node['depends_on']);seen=set()

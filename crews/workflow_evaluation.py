@@ -404,3 +404,147 @@ def dispatch(request, project, state):
     report['rollout'] = 'GO' if all(report[k] for k in required_gates) else 'NO_GO'
     report['selection'] = 'candidate' if report['rollout'] == 'GO' else 'baseline'
     return report
+
+
+def capability_metrics(records, objective):
+    """Nonmonetary arithmetic; only signed capability_dispatch authenticates it."""
+    if objective not in ('token-primary','latency-primary'):raise ValueError('frozen efficiency objective required')
+    sides={}
+    for arm in ('baseline','candidate'):
+        values=records[arm]
+        if not values:raise ValueError('capability pairs required')
+        complete=all(_number(v.get('tokens')) for v in values)
+        sides[arm]=dict(tokens=sum(v['tokens'] for v in values) if complete else None,
+                        attempts=sum(v['attempts'] for v in values),
+                        p95=sorted(v['latency_ms'] for v in values)[math.ceil(.95*len(values))-1])
+    left,right=sides['baseline'],sides['candidate']
+    coverage=left['tokens'] is not None and right['tokens'] is not None
+    quality=all(v['accepted'] for values in records.values() for v in values)
+    attempts=right['attempts']<=left['attempts']
+    if objective=='token-primary':
+        benefit=coverage and right['tokens']<left['tokens'] and right['p95']<=left['p95']*1.2
+    else:
+        benefit=right['p95']<left['p95'] and (not coverage or right['tokens']<=left['tokens']*1.2)
+    return dict(**sides,qualifies=bool(quality and attempts and benefit),
+                reason='measured_benefit' if quality and attempts and benefit else 'no_measured_benefit',
+                token_efficiency='known' if coverage else 'unknown',
+                benefit_scope='latency_only' if objective=='latency-primary' and not coverage else objective,
+                objective=objective,money_status='not_evaluated',activation_authority=False)
+
+
+def _capability_schema(db):
+    db.execute('CREATE TABLE IF NOT EXISTS capability_comparisons(id TEXT PRIMARY KEY,project TEXT NOT NULL,request TEXT NOT NULL,created REAL NOT NULL,result TEXT)')
+    db.execute('CREATE TABLE IF NOT EXISTS capability_holdouts(project TEXT NOT NULL,source_group TEXT NOT NULL,comparison TEXT NOT NULL,PRIMARY KEY(project,source_group))')
+    db.execute('CREATE TABLE IF NOT EXISTS capability_content_holdouts(project TEXT NOT NULL,before_hash TEXT NOT NULL,comparison TEXT NOT NULL,PRIMARY KEY(project,before_hash))')
+
+
+def capability_dispatch(request,project,state):
+    if isinstance(request,dict) and request.get('operation')=='freeze':
+        from crews.recipes import evidence_lock
+        with evidence_lock(state):return _capability_dispatch(request,project,state)
+    return _capability_dispatch(request,project,state)
+
+
+def _capability_dispatch(request,project,state):
+    """Versioned signed comparison; each arm retains its own native model binding."""
+    from crews import omp_adapter as a
+    from crews.outcomes import verified_reference
+    project=a.canonical(project)
+    if not isinstance(request,dict) or request.get('version')!=1:raise ValueError('capability comparison version 1 required')
+    operation=request.get('operation')
+    if operation=='freeze':
+        if set(request)!={'version','operation','spec','approval','confirmed'} or request['confirmed'] is not True:raise ValueError('signed capability freeze required')
+        nonce=authorize(request,project,state);spec=request['spec']
+        if not isinstance(spec,dict) or set(spec)!={'objective','units','arms'} or spec['objective'] not in ('token-primary','latency-primary'):raise ValueError('strict capability comparison spec required')
+        arms=spec['arms']
+        if not isinstance(arms,dict) or set(arms)!={'baseline','candidate'}:raise ValueError('paired capability arms required')
+        for arm,combo in (('baseline','Medium'),('candidate','Small')):
+            binding=arms[arm]
+            if not isinstance(binding,dict) or set(binding)!={'combo','provider','model','effort','policy','revision','environment','roles'} or binding['combo']!=combo:raise ValueError('own frozen Medium/Small arm bindings required')
+            if any(not isinstance(binding[k],str) or not binding[k] for k in ('provider','model','effort','policy','revision')) or not isinstance(binding['environment'],dict) or not binding['environment']:raise ValueError('versioned provider/model/environment required')
+            if not isinstance(binding['roles'],dict) or not binding['roles']:raise ValueError('frozen per-role bindings required')
+            for role,identity in binding['roles'].items():
+                if not isinstance(role,str) or not role or not isinstance(identity,dict) or set(identity)!={'provider','model','effort','policy','revision'} or any(not isinstance(v,str) or not v for v in identity.values()):raise ValueError('strict frozen role identity required')
+        shared=set(arms['baseline']['roles'])&set(arms['candidate']['roles'])
+        if set(arms['baseline']['roles'])!=set(arms['candidate']['roles']):raise ValueError('same frozen role identities required')
+        changed=[role for role in shared if arms['baseline']['roles'][role]!=arms['candidate']['roles'][role]]
+        if len(changed)!=1 or any(arms[arm]['roles'][changed[0]]!={k:arms[arm][k] for k in ('provider','model','effort','policy','revision')} for arm in arms):raise ValueError('only producer treatment binding may differ')
+        if arms['baseline']['environment']!=arms['candidate']['environment']:raise ValueError('equal resource environment required')
+        groups=set();units=set()
+        if not isinstance(spec['units'],list) or not spec['units']:raise ValueError('fresh independent holdout required')
+        for unit in spec['units']:
+            if not isinstance(unit,dict) or set(unit)!={'id','source_group','before_hash','acceptance_hash','profile_hash'} or any(not isinstance(v,str) or not v for v in unit.values()) or unit['id'] in units or unit['source_group'] in groups:raise ValueError('unique original unit/source group required')
+            units.add(unit['id']);groups.add(unit['source_group'])
+        from crews.automation import database as learning_database
+        with learning_database(state) as learned:
+            from crews.recipes import _SCHEMA
+            learned.executescript(_SCHEMA)
+            for group in groups:
+                for owner, in learned.execute('SELECT project FROM recipe_source_groups WHERE source_group=?',(group,)):
+                    if Path(owner)==Path(project) or Path(owner).is_relative_to(Path(project)) or Path(project).is_relative_to(Path(owner)):raise ValueError('capability holdout reused for learning')
+            for unit in spec['units']:
+                for owner,raw in learned.execute('SELECT r.project,e.proof FROM recipe_v1_evidence e JOIN recipe_v1_recipes r ON r.id=e.recipe'):
+                    if (Path(owner)==Path(project) or Path(owner).is_relative_to(Path(project)) or Path(project).is_relative_to(Path(owner))) and json.loads(raw).get('execution',{}).get('before_hash')==unit['before_hash']:raise ValueError('capability content holdout reused for learning')
+        eid=digest(dict(project=project,spec=spec))
+        with a.database(state) as db:
+            _capability_schema(db);db.execute('BEGIN IMMEDIATE');consume(db,nonce)
+            for group in groups:
+                for owner, in db.execute('SELECT project FROM capability_holdouts WHERE source_group=?',(group,)):
+                    if Path(owner)==Path(project) or Path(owner).is_relative_to(Path(project)) or Path(project).is_relative_to(Path(owner)):raise ValueError('capability holdout already consumed')
+                db.execute('INSERT INTO capability_holdouts VALUES(?,?,?)',(project,group,eid))
+            for unit in spec['units']:
+                for owner, in db.execute('SELECT project FROM capability_content_holdouts WHERE before_hash=?',(unit['before_hash'],)):
+                    if Path(owner)==Path(project) or Path(owner).is_relative_to(Path(project)) or Path(project).is_relative_to(Path(owner)):raise ValueError('capability content holdout already consumed')
+                db.execute('INSERT INTO capability_content_holdouts VALUES(?,?,?)',(project,unit['before_hash'],eid))
+            db.execute('INSERT INTO capability_comparisons VALUES(?,?,?,?,NULL)',(eid,project,json.dumps(request),time.time()))
+        return dict(version=1,comparison_id=eid,frozen=True)
+    if operation not in ('report','status'):raise ValueError('capability operation freeze/report/status required')
+    with a.database(state) as db:
+        _capability_schema(db)
+        row=db.execute('SELECT request,created,result FROM capability_comparisons WHERE id=? AND project=?',(request.get('comparison_id'),project)).fetchone()
+        if not row:raise ValueError('capability comparison missing')
+        frozen=json.loads(row[0]);authorize(frozen,project,state,accepted_at=row[1]);spec=frozen['spec']
+        if operation=='status':return dict(version=1,spec=spec,result=json.loads(row[2]) if row[2] else None)
+        if row[2]:raise ValueError('capability comparison already reported; use status')
+        references=request.get('arms');records={};seen=set()
+        if not isinstance(references,dict) or set(references)!={'baseline','candidate'}:raise ValueError('both executed arms required')
+        for arm in ('baseline','candidate'):
+            binding=spec['arms'][arm];records[arm]=[]
+            if not isinstance(references[arm],dict) or set(references[arm])!={u['id'] for u in spec['units']}:raise ValueError('exact frozen units required')
+            for unit in spec['units']:
+                ref=references[arm][unit['id']]
+                if not isinstance(ref,dict) or set(ref)!={'project','reference','coverage'}:raise ValueError('canonical pair and whole-workflow coverage required')
+                child=a.canonical(ref['project'])
+                if child==project or not Path(child).is_relative_to(Path(project)):raise ValueError('comparison requires isolated arm snapshot')
+                proof=verified_reference(ref['reference'],child,state)
+                if child in seen:raise ValueError('comparison arm snapshot reused')
+                seen.add(child)
+                evidence,created,_=_snapshot(db,proof['reference']['workflow'],child,True)
+                manifest=evidence['manifest']
+                if created<=row[1] or manifest['environment']!=binding['environment']:raise ValueError('execution precedes freeze or environment drift')
+                if proof['learned'] or proof['source_group']!=unit['source_group'] or proof['execution']['before_hash']!=unit['before_hash'] or proof['execution']['acceptance_hash']!=unit['acceptance_hash'] or proof['profile_hash']!=unit['profile_hash']:raise ValueError('capability original contract/source drift')
+                expected=digest({k:binding[k] for k in ('provider','model','effort','policy','revision')})
+                if proof['combo']!=binding['combo'] or proof['model_binding']!=expected:raise ValueError('capability mixed arm receipt')
+                producer_role=proof['reference']['producer']['role']
+                if binding['roles'].get(producer_role)!={k:binding[k] for k in ('provider','model','effort','policy','revision')}:raise ValueError('frozen treatment role is not producer')
+                attempts=evidence['attempts'];ids={r[1] for r in attempts}
+                coverage=ref['coverage']
+                if not isinstance(coverage,dict) or set(coverage)!=COMPONENTS or any(not isinstance(v,list) for v in coverage.values()):raise ValueError('all orchestration/scout/check/governance/recheck coverage required')
+                covered=[i for values in coverage.values() for i in values]
+                if len(set(covered))!=len(covered) or set(covered)!=ids or ids!={r[0] for r in evidence['linked_attempts']}:raise ValueError('missing or duplicate failed-attempt coverage')
+                tokens=0;complete=True;ends=[];accepted=proof['verified']
+                for attempt in attempts:
+                    cell=json.loads(attempt[4]);result=json.loads(attempt[5]);ends.append(attempt[6])
+                    if not result.get('host_authenticated') or not model_proof(cell,result):raise ValueError('attempt authenticated model proof missing')
+                    identity=dict(provider=cell.get('provider'),model=cell.get('model'),effort=cell.get('reasoning_effort'),policy=cell.get('routing_policy_version'),revision=cell.get('model_revision') or 'unversioned')
+                    if binding['roles'].get(cell['role_id'])!=identity:raise ValueError('capability frozen role binding drift')
+                    if result.get('failure_kind') or result.get('status')!='COMPLETE' or result.get('outcome',{}).get('claim_contradicted'):accepted=False
+                    usage=result.get('native',{}).get('usage') or {}
+                    if all(_number(usage.get(k)) for k in ('input','output')):tokens+=usage['input']+usage['output']
+                    else:complete=False
+                if not ends or any(not _number(end) or end<created for end in ends):raise ValueError('host latency evidence missing')
+                if any(c[2] in ('planned','admitted') for c in evidence['calls']):raise ValueError('unsettled comparison workflow')
+                records[arm].append(dict(accepted=accepted,tokens=tokens if complete else None,attempts=len(attempts),latency_ms=(max(ends)-created)*1000))
+        result=dict(version=1,authenticated=True,**capability_metrics(records,spec['objective']))
+        db.execute('UPDATE capability_comparisons SET result=? WHERE id=? AND result IS NULL',(json.dumps(result),request['comparison_id']))
+        return result

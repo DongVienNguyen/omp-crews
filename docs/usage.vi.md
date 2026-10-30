@@ -2,9 +2,18 @@
 
 Hướng dẫn dành cho người dùng và người cài từ Git. [README](../README.md) mô tả contract kỹ thuật; lệnh `help` của [CLI](../bin/crews-omp.mjs) là nơi tra cứu cú pháp hiện hành.
 
+### Capability API và quyết định rollout
+
+`crew_capability` và `crews-omp workflow capability_trial|capability_comparison|opportunities` nhận wrapper `{version:1,operation,request}`. Trial/comparison dùng chữ ký operator, không dùng quyền keyless để tự ký. Medium pass chỉ tạo opportunity; không tạo nhãn Small. Trial giữ snapshot riêng, scope tối đa 3 file, difficulty trên 1 đến 1.5, đầy đủ safety facts và checker độc lập. Comparison đóng băng mục tiêu token/latency trước khi chạy, giữ binding riêng Medium/Small, không cấp quyền activate.
+
+Check hành vi, signed lifecycle, CLI, packaging11/11, native OMP local scripted và review contract độc lập đã pass. Native provider thật: baseline Medium và trial Small đều pass checker độc lập; latency tăng1,308x vượt gate1,20 nên **NO_GO cho rollout frontier**. Giữ policy/mode/floor hiện tại, không activate recipe. Hai timeout trước vẫn giữ lịch sử. Một trial không chứng minh năng lực production hay đủ promotion; xem [bằng chứng](../plans/261029-0221-small-routing-learning-repair/native-results.md). Trial chỉ dispatch từ đúng snapshot; cancel/lease/policy/deployment drift thu hồi ticket tiếp theo. Opportunity cần signed review; comparison pin từng role và tách train/holdout theo source group lẫn nội dung gốc, khóa liên tiến trình giữ đến commit.
+
+
 ## 1. Crews làm gì?
 
 Crews chia công việc đã được cấp quyền thành các role, chọn Combo phù hợp cho từng role và kiểm tra model/effort thực sự đã chạy. Nó không đổi main chat model và không chuyển mọi cuộc trò chuyện thành công việc nhiều agent.
+
+Mọi delegation phải dùng canonical intake hoặc crew reference đã được cấp quyền. Gọi `task` trực tiếp với `agent`/`tasks` bị từ chối; không tự chuyển model hay đoán scope. Main chat vẫn dùng model đã chọn. Policy routing thuộc từng project trong governance; `policy.json` chỉ cấu hình Combo/provider/model/effort. Mapping `baseline` cho phép Small khi đủ guard; mapping `floor` là mức tối thiểu chủ ý và không được tự hạ.
 
 Có ba lớp riêng biệt:
 
@@ -53,6 +62,24 @@ Có thể dùng `omp plugin install https://github.com/DongVienNguyen/omp-crews.
 - `doctor`: `ok:true`, `status:"ready"`, `problems:[]`.
 - Không cần tạo `operator-public.pem`, private key hoặc ký grant để sử dụng chế độ mặc định.
 - Setup không gọi model để đăng ký hàng loạt recipe. Review Large khởi tạo xảy ra khi bắt đầu dùng project.
+
+### Phạm vi global và profile riêng
+
+`--scope user` nạp plugin cho các project dùng cùng OMP user profile; không cần cài lại mỗi project. Khi mở project mới, host đăng ký policy riêng và xếp review Large đầu tiên. Global không phải daemon: đóng OMP thì không có task tự chạy. Project đã tắt automation vẫn giữ lựa chọn đó.
+
+Named profile có agent/state riêng. Dùng cùng profile ở cả OMP, setup và doctor; không copy runtime hoặc DB từ profile mặc định:
+
+```powershell
+$project = "D:\Projects\my-app"
+omp --profile work plugin link "$src" --scope user
+node "$src\bin\crews-omp.mjs" setup --profile work --python python --json
+node "$src\bin\crews-omp.mjs" doctor --profile work --json
+omp --profile work --cwd "$project"
+```
+
+Chạy với `--no-extensions`, disable plugin hoặc cấu hình xung đột có thể bỏ qua/chặn Crews. Không thêm một bản extension thủ công bên cạnh plugin đã link. Restart toàn bộ session cần dùng bản mới sau update; `/crew reload` không thay thế việc nạp lại module trên Windows.
+
+Cài plugin từ Git chỉ cài source code và hướng dẫn. Credentials/provider, Python và state được provision ở máy đích qua setup; policy reviewed, recipe evidence và kết quả trên máy tác giả không được đóng gói thành quyền của bạn. Chạy doctor tại máy/profile đích trước khi giao task.
 
 Nếu trước đây từng thử signer và báo `EISDIR`, đó là do truyền thư mục thay vì tên file. Với chế độ mặc định hiện tại, **không cần tiếp tục chuỗi lệnh ký đó**. Không xóa/ghi đè key cũ nếu còn dùng giao diện signed nâng cao.
 
@@ -161,6 +188,26 @@ Thay các ID ví dụ bằng model thực sự có trong OMP. Không đưa API k
 
 `Auto`: difficulty <1 dùng low; từ1 đến dưới2 dùng medium; từ2 dùng high. Effort cố định của Combo thắng Auto. Mỗi role được phân loại riêng; không lấy độ khó toàn project áp cho mọi role. Thay Combo/model/effort làm plan cũ stale; tạo plan mới, không sửa lịch sử receipt.
 
+### Vì sao vẫn thấy nhiều Medium/Large?
+
+Global chỉ thống nhất đường admission; không ép tỷ lệ Small. Đọc `crew_results` hoặc `/crew report` để phân biệt main chat, governance Large, role đã lập plan và role thực sự có native/wire receipt. `planned` không phải đã chạy; intake chỉ trả plan, orchestrator phải dispatch đúng `task {crew:{run,role,session}}` được trả về. Không replay plan cũ chỉ để tăng số lượt Small.
+
+Khai báo `everyday_implementation` difficulty2 hoặc semantic review difficulty2.5 thường vẫn chọn Medium/Large. Chia việc đọc facts và kiểm tra cơ học thành role riêng khi thực sự độc lập; không đổi tên một semantic verdict thành retrieval để hạ Combo. Bounded/routine implementation chỉ xuống Small khi có đầy đủ safety facts, scope và checker độc lập; xem [điều kiện routing](../README.md#bounded-implementation-on-small-050).
+
+`requested_combo` là baseline, `effective_combo` là lựa chọn hiện tại, `small_route` mô tả bounded/routine, `small_blockers` giải thích guard thiếu. Chỉ native/wire receipt chứng minh model/effort đã thực thi. `policy.json` quản lý Combo, còn routing/lease thuộc policy từng project. `baseline` không ép mức tối thiểu; `floor` có và renewal không được tự hạ nếu thiếu proposal migration đúng key đã được người dùng xác nhận và Large duyệt.
+
+Tích hợp embedded như `omp-system` cần cập nhật ở repository riêng của nó; cài Crews không tự patch code của plugin khác. Caller phải truyền classification và nguyên scope/schema/tools. Hai consumer đọc skill rồi chạy command đã đóng băng là mechanical verification; review ý nghĩa/chất lượng vẫn là role riêng. Không coi smoke local là chứng minh mọi task production dùng Small hoặc chất lượng model tương đương.
+
+### Một task đơn giản đi qua intake và dispatch
+
+Agent đọc `crew_catalog` rồi gửi intake có đủ scope/acceptance. Ví dụ đọc một file hiện có, không ghi hay chạy shell:
+
+```json
+{"intake":{"spec":{"task":"Đọc cấu hình hiện có","roles":[{"name":"read-settings","kind":"research","mission":"Đọc settings.json và báo giá trị hiện có; không sửa file","deliverable":"facts.json","scope":[],"inputs":["settings.json"],"commands":[],"acceptance":["Báo giá trị cùng nguồn settings.json"],"answers":{"need":"bounded_retrieval","difficulty":1,"divisible":0,"specific":1}}]},"answers":{"need":{"choice":"bounded_retrieval","confidence":1},"difficulty":{"score":1},"divisible":{"noul":0},"needs_verifier":{"noul":0}},"session":"read-settings-unique"}}
+```
+
+Chỉ dùng ví dụ khi `settings.json` thực sự tồn tại và được phép đọc. Intake trả `waves` cùng crew reference; agent gọi `task` bằng đúng reference đó. Không copy run ID từ tài liệu, không tự chọn model và không coi intake là đã thực thi. Sau dispatch kiểm `crew_results`: status, native/wire model/effort, host authentication và verification; hành vi chưa có executable checker vẫn có thể là unknown dù native hoàn tất.
+
 ## 8. Evidence, recipe và kiểm tra độc lập
 
 Để tự tạo recipe từ công việc thật, role phải có metadata rõ ràng: family `recipe_features`, `recipe_profile`, `model_revision`, safety facts và checker độc lập. Xem [verified outcomes](../README.md#verified-outcomes-and-adaptive-recipes) và [ví dụ task](../examples/produce-and-check.roles.json) để hiểu role/acceptance; ví dụ task cơ bản không tự bảo đảm có đủ metadata cho recipe.
@@ -248,12 +295,15 @@ Importer nhận packet trực tiếp hoặc kết quả export đầy đủ dạ
 Khi không có thay đổi riêng cần giữ:
 
 ```powershell
-git -C "$src" pull --ff-only
+git -C "$src" switch main
+git -C "$src" pull --ff-only origin main
 node "$src\bin\crews-omp.mjs" setup --python python --json
 node "$src\bin\crews-omp.mjs" doctor --json
 ```
 
 Nếu `pull` từ chối vì có thay đổi local, giữ lại thay đổi và giải quyết trước; không dùng reset/force để mất dữ liệu. Restart OMP sau cập nhật. Setup lặp lại giữ installation identity và disable đã chọn. Policy/code đổi có thể làm run cũ stale.
+
+Bản hiện hành được phát hành trên `DongVienNguyen/omp-crews` nhánh `main`. Nếu trước đây checkout feature branch, lệnh `switch main` chỉ đổi branch khi Git cho phép giữ an toàn thay đổi local; dừng xử lý conflict thay vì dùng force. Clone mới dùng `main` mặc định. Phiên OMP đang chạy vẫn cần restart sau khi update source.
 
 ### Đổi máy hoặc tài khoản
 
@@ -321,7 +371,7 @@ User đã cho phép bật trước khi benchmark đạt gate. Workflow mới m�
 
 CLI: `crews-omp workflow prepare|status|next|recheck|recover|attempts|evaluation --project PATH --request FILE [--yes]`. MCP dùng `crew_runner`. Manifest gồm `task`, `authority:{read,write,commands}`, `invariants`, `max_calls`, `nodes:[{id,stage,depends_on,roles,answers}]`; request có `slot`, `session`. Prepare/next/recheck/recover cần xác nhận. Dispatch từng reference `next` qua `task {crew:...}`; tối đa hai child độc lập, không tự chạy benchmark.
 
-Trong OMP dùng `crew_workflow {request:{operation:"prepare"|"status"|"next"|"recheck"|"recover",slot,session,...}}`; thao tác thay đổi cần `confirmed:true`. Hướng dẫn startup dùng workflow cho Crews coding nhiều stage, chỉ thêm scout khi thiếu context; một bước dùng intake trực tiếp. Task native thường không tự bị remap. Khởi động phiên OMP mới để nạp tool/hướng dẫn mới.
+Trong OMP dùng `crew_workflow {request:{operation:"prepare"|"status"|"next"|"recheck"|"recover",slot,session,...}}`; thao tác thay đổi cần `confirmed:true`. Hướng dẫn startup dùng workflow cho Crews coding nhiều stage, chỉ thêm scout khi thiếu context; một bước dùng intake trực tiếp. Delegation native không qua intake/reference bị từ chối, không được remap ngầm; main chat giữ model. Khởi động phiên OMP mới để nạp tool/hướng dẫn mới.
 
 Setup bật `task.structured:true` trong OMP; doctor báo not_ready nếu tắt. Khi false, native task bỏ schema caller và trả text thường — nguyên nhân JSON lỗi trước đây. Bật setting không đổi model/effort; chỉ cho host kiểm schema và tool yield. Checker runtime vẫn do host thực thi độc lập. Setup giữ các task setting khác/modelRoles; mở phiên mới sau cập nhật.
 

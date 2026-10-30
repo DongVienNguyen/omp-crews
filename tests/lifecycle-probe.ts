@@ -14,6 +14,11 @@ export default function(pi:any){
   loadCrews({zod:pi.zod,on:(n:string,f:any)=>hooks[n]=f,registerTool:(t:any)=>tools[t.name]=t,registerCommand:()=>{},getAllTools:()=>[],appendEntry:(type:any,data:any)=>entries.push({type,data})});
   const cwd=host.cwd;const ctx:any={cwd,agent:{kind:'main'},model:{id:'code-sol',provider:'9router'},sessionManager:{getSessionId:()=> 'lifecycle'},invokeTool:async()=>({details:{results:[]},content:[]})};
   hooks.before_agent_start({},ctx);
+  assert.equal(hooks.before_subagent_spawn({agent:'scout',invocationKind:'task'},ctx).block,true);
+  assert.equal(hooks.before_subagent_spawn({agent:'crew-research-small',invocationKind:'task'},ctx).block,true);
+  await assert.rejects(()=>tools.task.execute('native-bypass',{tasks:[{agent:'scout',task:'Read fixture'}]},undefined,undefined,ctx),/canonical intake/);
+  hooks.before_provider_request({payload:{model:'code-sol',reasoning_effort:'high'}},ctx);
+  assert.ok(entries.some(e=>e.data.path==='main'&&e.data.model==='code-sol'));
   hooks.tool_call({toolName:'write',toolCallId:'bad',input:{path:'xd://mcp__crews_omp_crew_plan'}},ctx);
   assert.equal(hooks.tool_call({toolName:'task',input:{}},ctx).block,true);
   hooks.tool_result({toolCallId:'bad',isError:true},ctx);

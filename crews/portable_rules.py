@@ -65,6 +65,8 @@ def exchange(request,project,state):
             limits=json.loads(grant['request']);kind=request.get('kind','policy');context={}
             if kind=='policy':
                 target=grant['id'];proposal={key:limits[key] for key in governance.DEFAULTS};schema=governance.schema()['properties']['policy']
+                proposal=copy.deepcopy(proposal)
+                proposal['routing']={need:governance.routing_entry(entry) for need,entry in proposal['routing'].items()}
                 description='Optimize supported Crews policy. Return this JSON packet, edit ONLY proposal. Preserve every other field. No code, commands, credentials or invented evidence.'
             elif kind=='recipe':
                 target=request.get('recipe_id');row=recipes._row(db,project,target);body=json.loads(row['body'])
@@ -101,7 +103,7 @@ def exchange(request,project,state):
         imported=dict(external_export=packet['export_id'],external_proposal=packet['proposal'])
         validate_job(db,imported,project)
         if packet['kind']=='policy':
-            proposal=governance.validate(packet['proposal'])
+            proposal=governance.validate(packet['proposal'],typed_routing=True)
             imported.update(operation='govern',policy=proposal,aggregate=auto._aggregate(db,project,state)[0],policy_binding=limits['policy_binding'])
         else:
             proposal=packet['proposal']

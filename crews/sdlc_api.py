@@ -4,6 +4,16 @@ from crews import runner
 
 def dispatch(request,project,state):
     if not isinstance(request,dict):raise ValueError('SDLC request required')
+    if request.get('operation') in ('capability_trial','capability_comparison','opportunities'):
+        if request.get('version')!=1 or set(request)-{'version','operation','request'}:raise ValueError('strict capability API version 1 required')
+        if request['operation']=='opportunities':
+            from crews.opportunities import dispatch as opportunity
+            return opportunity(request.get('request') or dict(version=1,operation='report'),project,state)
+        if request['operation']=='capability_trial':
+            from crews.capability_trials import dispatch as capability
+        else:
+            from crews.workflow_evaluation import capability_dispatch as capability
+        return capability(request.get('request'),project,state)
     if request.get('operation')=='evaluation':
         from crews.workflow_evaluation import dispatch as evaluate
         payload=request.get('request')

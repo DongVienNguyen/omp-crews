@@ -71,6 +71,7 @@ class RoleSpec(RoleMetadata):
  checker_profile: CheckerProfile | None = None
  verify_targets: list[Text] = Field(default_factory=list)
  evidence_unit: Text | None = None
+ source_group: Text | None = None
  recipe_features: dict[str,Text] | None = None
  recipe_profile: BoundedCheck | None = None
  model_revision: Text | None = None
@@ -204,6 +205,8 @@ def crew_catalog()->dict:
  classification_policy={'rubric':RUBRIC,'facts_schema':ClassificationFacts.model_json_schema(),'auto_intake_schema':IntakePlanArguments.model_json_schema()}
  classification_policy['bounded_implementation']=a.BOUNDED_ROUTE
  classification_policy['routine_implementation']={**a.BOUNDED_ROUTE,'max_difficulty':1,'true_facts':[key for key in a.BOUNDED_ROUTE['true_facts'] if key!='deterministic_check'],'check':'routine_check names an independent read-only check role, carrying original acceptance and artifact inputs, dispatched in a later wave; executable checker inputs outside every writer scope'}
+ classification_policy['precedence']={'order':['need_baseline','static_or_approved_capability','explicit_floor','critical_risk_floor'],'legacy_mapping':'force_preserve','baseline_mapping':'cannot waive capability gates'}
+ classification_policy['capability_api']={'version':1,'operations':['opportunities','capability_trial','capability_comparison'],'frontier':{'min_difficulty_exclusive':1,'max_difficulty':1.5,'max_files':3,'full_safety_facts':True,'writer_commands':False,'reviewed_opportunity':True,'signed_consent':True},'trial_caps':{'per_session':1,'per_project_day':2,'attempts':2},'learned_hits':'audit_only_never_self_train','comparison_objectives':['token-primary','latency-primary'],'money_status':'not_evaluated'}
  return {'combos':policy['combos'],'model_policy':policy,'classifier_model':a.policy()['classifier_model'],'policy_version':policy_version(),'classification_policy':classification_policy,'combo_effort_options':['Low','Medium','High','Auto'],'effort_policy':{'auto':'difficulty: [0,1) low; [1,2) medium; [2,3] high','selection':{'Small':['mechanical_verification','repeatable_task','bounded_retrieval'],'Medium':['everyday_implementation','long_running_agentic'],'Large':['difficult_review','integration_architecture','specialist']}},'needs':list(cat['needs']),'questions':cat['questions'],'kind_columns':{kind:details['column'] for kind,details in cat['kinds'].items()},'thresholds':cat['thresholds'],'minimal_example':minimal_example(),'guard':'native wrapper plus extension checks; not OS sandbox','concurrency':2,'depth':1}
 
 
@@ -285,5 +288,12 @@ def crew_storage(request:dict)->dict:
  from crews.storage import dispatch
  if (request.get('operation')=='compact' or request.get('operation')=='cleanup' and request.get('dry_run') is False) and request.get('confirmed') is not True:raise ValueError('storage mutation requires explicit confirmation')
  return dispatch({k:v for k,v in request.items() if k!='confirmed'},a.home())
+
+@mcp.tool()
+def crew_capability(request:dict,project:str)->dict:
+ """Version 1 signed isolated trials/comparisons and read-only opportunities; never auto-launches."""
+ from crews.sdlc_api import dispatch
+ if request.get('operation') not in ('capability_trial','capability_comparison','opportunities'):raise ValueError('capability operation required')
+ return dispatch(request,project,a.home())
 
 if __name__=='__main__':mcp.run(transport='stdio')

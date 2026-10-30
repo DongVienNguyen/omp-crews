@@ -110,21 +110,45 @@ def verified_pair(run,producer,checker,project,state=None):
         row=c.execute('SELECT project,plan FROM runs WHERE id=?',(run,)).fetchone()
         if not row or row[0]!=canonical(project):raise ValueError('verified pair project/run mismatch')
         plan=json.loads(row[1]);cells={x['role_id']:(i,x) for i,w in enumerate(plan['waves']) for x in w['calls']}
-        if producer not in cells or checker not in cells:raise ValueError('verified pair roles missing')
-        pi,p=cells[producer];ci,ch=cells[checker]
-        if not p['agent_type'].startswith(('crew-produce-','crew-integrate-')) or not ch['agent_type'].startswith('crew-check-') or ci<=pi:raise ValueError('independent later checker required')
-        if producer not in ch.get('verify_targets',[]):raise ValueError('checker is not bound to producer acceptance')
-        values={}
-        for name,cell in [(producer,p),(checker,ch)]:
-            r=c.execute('SELECT status,result FROM calls WHERE run=? AND role=?',(run,name)).fetchone()
+        checker_ref=checker if isinstance(checker,dict) else {'run':run,'role':checker}
+        checker_run=checker_ref.get('run');checker=checker_ref.get('role')
+        if producer not in cells:raise ValueError('verified pair producer missing')
+        pi,p=cells[producer]
+        if checker_run==run:
+            if checker not in cells:raise ValueError('verified pair checker missing')
+            ci,ch=cells[checker]
+            if ci<=pi or producer not in ch.get('verify_targets',[]):raise ValueError('independent later checker required')
+        else:
+            other=c.execute('SELECT project,plan FROM runs WHERE id=?',(checker_run,)).fetchone()
+            if not other or other[0]!=canonical(project):raise ValueError('verified checker project/run mismatch')
+            ch=next((x for w in json.loads(other[1])['waves'] for x in w['calls'] if x['role_id']==checker),None)
+            if not ch or not p.get('workflow_id') or ch.get('workflow_id')!=p['workflow_id'] or {'run':run,'role':producer} not in ch.get('workflow_targets',[]):raise ValueError('checker workflow linkage missing')
+            from crews.workflow import _manifest,_validate_frozen,_validate_artifacts,_rows
+            manifest=_manifest(c,p['workflow_id']);_validate_frozen(manifest,project,state);_validate_artifacts(c,manifest)
+            if _rows(c,manifest)[ch['node_id']]['state'] not in ('completed','failed'):raise ValueError('checker invalidated or incomplete')
+        if not p['agent_type'].startswith(('crew-produce-','crew-integrate-')) or not ch['agent_type'].startswith('crew-check-') or ch.get('write_scope'):raise ValueError('independent read-only checker required')
+        if not set(p.get('acceptance') or [])<=set(ch.get('acceptance') or []) or not set(p['write_scope'])<=set(ch.get('read_scope') or []):raise ValueError('checker original acceptance/artifacts missing')
+        values={};attempt_refs={}
+        for name,cell,ref_run,key in [(producer,p,run,'producer'),(checker,ch,checker_run,'checker')]:
+            r=c.execute('SELECT status,result FROM calls WHERE run=? AND role=?',(ref_run,name)).fetchone()
             if not r or not r[1]:raise ValueError('verified pair missing result')
-            result=json.loads(r[1]);values[name]=(r[0],result)
+            result=json.loads(r[1]);values[key]=(r[0],result)
+            if c.execute("SELECT 1 FROM sqlite_master WHERE name='execution_attempts'").fetchone():
+                attempt=c.execute('SELECT id,created,cell,result FROM execution_attempts WHERE run=? AND role=? ORDER BY ordinal DESC LIMIT 1',(ref_run,name)).fetchone()
+                if not attempt:raise ValueError('verified pair attempt missing')
+                frozen_cell=json.loads(attempt[2]);frozen_result=json.loads(attempt[3])
+                if frozen_cell!=cell or any(frozen_result.get(k)!=result.get(k) for k in ('native','wire','fingerprints','host_authenticated','status')):raise ValueError('latest result differs from immutable attempt')
+                if key=='checker' and checker_ref.get('attempt',attempt[0])!=attempt[0]:raise ValueError('checker attempt reference stale')
+                attempt_refs[key]={'run':ref_run,'role':name,'attempt':attempt[0],'created':attempt[1]}
             if not model_proof(cell,result):raise ValueError('verified pair model proof missing')
             if not result.get('host_authenticated'):raise ValueError('verified pair lacks authenticated host completion')
             expected=result.get('fingerprints') or {}
             if fingerprints(project,list(expected))!=expected:raise ValueError('verified pair evidence stale')
-        ps,pr=values[producer];cs,cr=values[checker];outcome=cr.get('outcome') or {}
-        behavior=outcome.get('behavior','unknown');verified=(ps=='completed' and cs=='completed' and behavior=='pass')
+        if attempt_refs and (attempt_refs['checker']['attempt']<=attempt_refs['producer']['attempt'] or attempt_refs['checker']['created']<attempt_refs['producer']['created']):raise ValueError('checker predates current producer attempt')
+        ps,pr=values['producer'];cs,cr=values['checker'];outcome=derive(ch,cr,project)
+        behavior=outcome.get('behavior','unknown')
+        if outcome['execution']!='completed' or pr.get('failure_kind') or pr.get('status')!='COMPLETE':behavior='unknown'
+        verified=(ps=='completed' and cs=='completed' and behavior=='pass')
         artifact={k:v for k,v in pr.get('fingerprints',{}).items() if k in p['write_scope']}
         if not artifact or any(v is None for v in artifact.values()):raise ValueError('verified pair artifacts missing')
         p_profile=ch.get('checker_profile') or {}
@@ -141,8 +165,16 @@ def verified_pair(run,producer,checker,project,state=None):
             if accounted:accounting=json.loads(accounted[0])
         return {'verified':verified,'delivered':ps=='completed' and cs in ('completed','failed') and behavior in ('pass','fail'),'behavior':behavior,'unit_hash':digest({'before_content':sorted(str(v) for v in (p.get('input_fingerprints') or {}).values())}),
                 'artifacts':artifact,'profile_hash':digest(p_profile),'model_binding':binding,'execution':{'status':outcome.get('execution','unknown'),'before_hash':before,'acceptance_hash':digest(p.get('acceptance',[])),'abstained':p.get('policy_abstained'),'claim_contradicted':pr.get('outcome',{}).get('claim_contradicted',False),'latency_ms':accounting['latency_ms'] if accounting else latency if latency>0 else None,'cost':accounting['cost'] if accounting else sum(costs) if known_cost else None,'accounting_complete':accounting is not None},
-                'source':'independent_checker','learned':bool(p.get('recipe_id') or p.get('classification',{}).get('outcome')=='learned')}
+                'reference':{'version':2,'workflow':p.get('workflow_id'),**attempt_refs},'combo':p.get('policy_combo'),'model_revision':p.get('model_revision'),'source_group':p.get('source_group') or digest({'before_content':sorted(str(v) for v in (p.get('input_fingerprints') or {}).values())}),'source':'independent_checker','learned':bool(p.get('recipe_id') or p.get('classification',{}).get('outcome')=='learned')}
 
+
+def verified_reference(reference,project,state=None):
+    if not isinstance(reference,dict) or set(reference)!={'version','workflow','producer','checker'} or reference['version']!=2:raise ValueError('canonical attempt pair reference required')
+    p=reference['producer'];ch=reference['checker']
+    if not isinstance(p,dict) or not isinstance(ch,dict) or not {'run','role','attempt'}<=set(p) or not {'run','role','attempt'}<=set(ch):raise ValueError('attempt-bound producer/checker required')
+    proof=verified_pair(p['run'],p['role'],ch,project,state)
+    if proof['reference']!=reference:raise ValueError('canonical pair stale or changed')
+    return proof
 
 def process_alive(pid):
     if type(pid) is not int or pid<=0:raise ValueError('host_pid must be positive integer')

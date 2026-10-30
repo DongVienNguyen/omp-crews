@@ -6,6 +6,8 @@ import sys
 import tempfile
 import sqlite3
 import time
+from itertools import count
+from unittest.mock import patch
 from pathlib import Path
 from approval_fixture import Signer
 from check_effort_policy import isolated_home, task_answers
@@ -24,7 +26,7 @@ def reject(call):
 
 
 def run(evaluation_mode='monetary', max_latency_ms=None):
-    with tempfile.TemporaryDirectory(prefix='workflow-accounting-') as folder, isolated_home(folder):
+    with tempfile.TemporaryDirectory(prefix='workflow-accounting-') as folder, isolated_home(folder), patch('time.time',side_effect=count(time.time(),.01).__next__):
         root = Path(folder)
         signer = Signer()
         specs, arms = {}, {}
@@ -73,9 +75,7 @@ def run(evaluation_mode='monetary', max_latency_ms=None):
             def send(op, **kw):
                 return workflow.dispatch(dict(operation='workflow_' + op, slot='accounting', session=arm, profile=arms[arm]['profile'], confirmed=True, **kw), project, folder)
             status = send('prepare', workflow=specs[arm])
-            if evaluation_mode == 'quality_only' and arm == 'baseline':
-                # Real orchestration wait belongs to end-to-end wall latency.
-                time.sleep(.5)
+            # Fixture host clock advances deterministically; no scheduler-dependent sleep.
             while not status.get('complete'):
                 assert not status.get('blocked'), status
                 for ref in status['next']:

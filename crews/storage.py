@@ -188,7 +188,7 @@ def _summary(plan, calls, attempts):
                 'usage': {k: v for k, v in usage.items() if k in
                           {'input', 'output', 'inputTokens', 'outputTokens', 'cacheRead', 'cacheWrite',
                            'totalTokens', 'total', 'cost'} and _number(v)}}
-        for key in ('requested_combo', 'effective_combo', 'bounded_small', 'small_route', 'small_blockers', 'routing_reason', 'routing_policy_version'):
+        for key in ('requested_combo', 'effective_combo', 'bounded_small', 'small_route', 'small_blockers', 'routing_reason', 'routing_policy_version', 'candidate_route', 'blocked_by', 'policy_source', 'dispatch_entry', 'workflow_id', 'automation_governance'):
             if key in cell:
                 item[key] = cell[key]
         if result.get('outcome'):

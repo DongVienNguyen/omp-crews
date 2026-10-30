@@ -261,9 +261,9 @@ def feedback_checks(home, role, proposal, policy, context):
                 'classification': {'learning': {'observation_id': observed['observation_id']}}}
         plan = {'waves': [{'kind': role['kind'], 'calls': [cell]}]}
         result = {'status': 'COMPLETE', 'verification': ['assert artifact verified independently'],
-                  'native': {'exitCode': 0, 'resolvedModel': cell['model'],
+                  'native': {'exitCode': 0, 'resolvedModel': cell['provider'] + '/' + cell['model'] + ':' + cell['reasoning_effort'],
                              'resolvedThinkingLevel': cell['reasoning_effort']},
-                  'wire': {'model': cell['model'], 'effort': cell['reasoning_effort'], 'provider': cell['provider']},
+                  'wire': {'model': cell['model'], 'effort': cell['reasoning_effort'], 'provider': cell['provider'], 'role': 'check'},
                   'fingerprints': {'artifact.txt': hashlib.sha256(target.read_bytes()).hexdigest()}}
         save(name, plan, result)
         return plan, result, observed['observation_id']

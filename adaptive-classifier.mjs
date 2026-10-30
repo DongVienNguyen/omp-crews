@@ -38,5 +38,5 @@ export async function classifyAdaptive({role,project,session,declared,config,cla
  const usage=semantic?.usage;
  const outcome=semantic?.recommendation?'ok':!semantic?'ok':semantic.reason?.includes('timeout')?'timeout':semantic.reason?.includes('canceled')?'cancelled':semantic.outcome==='off'?'unknown':'provider_error';
  const observation=preview?null:store({...base,operation:'observe',proposal,metrics:{source:semantic?'teacher':declared.outcome,outcome,teacher_requested:Boolean(semantic&&semantic.outcome!=='off'),shadow_sampled:sampled,cache_hit:semantic?.cacheHit??false,latency_ms:semantic?.latencyMs??0,input_tokens:usage?.input??usage?.inputTokens??null,output_tokens:usage?.output??usage?.outputTokens??null,reasoning_tokens:usage?.reasoning??usage?.reasoningTokens??null},rule_id:lookup?.rule_id??null});
- return {...effective,semantic,shadow_sampled:sampled,learning:{...observation,unavailable:learningError}};
+ return {...effective,semantic,shadow_sampled:sampled,learning:{...observation,unavailable:learningError,lookup_reason:preview?'preview_no_lookup':!needsTeacher?'declared_answers_skip_exact_lookup':lookup?.reason??(config.mode==='off'?'off':'exact_miss'),label_created:false}};
 }

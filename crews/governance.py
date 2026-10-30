@@ -58,7 +58,31 @@ def install(folder, enabled=None):
     return value
 
 
-def validate(value):
+def routing_entry(value):
+    if isinstance(value, str) and value in ('Small', 'Medium', 'Large'):
+        return dict(mode='floor', combo=value)
+    if (not isinstance(value, dict) or set(value) != {'mode', 'combo'} or
+            value['mode'] not in ('baseline', 'floor') or value['combo'] not in ('Small', 'Medium', 'Large')):
+        raise ValueError('routing entry requires mode baseline/floor and combo Small/Medium/Large')
+    return dict(value)
+
+
+def validate_floor_transition(previous, approved, proposal=None):
+    """Keep floors unless frozen operator routing proposes this exact reduction."""
+    ranks = {'Small': 0, 'Medium': 1, 'Large': 2}
+    for need, entry in previous.items():
+        floor = routing_entry(entry)
+        if floor['mode'] != 'floor':
+            continue
+        current = routing_entry(approved[need]) if need in approved else None
+        if current and current['mode'] == 'floor' and ranks[current['combo']] >= ranks[floor['combo']]:
+            continue
+        proposed = routing_entry(proposal[need]) if proposal is not None and need in proposal else None
+        if proposal is None or proposed != current:
+            raise ValueError('routing floor reduction requires exact frozen operator proposal: ' + need)
+
+
+def validate(value, *, typed_routing=False):
     from crews import catalog, recipes
     if not isinstance(value, dict) or set(value) != set(DEFAULTS):
         raise ValueError('policy requires exactly ' + ', '.join(DEFAULTS))
@@ -74,11 +98,14 @@ def validate(value):
     if policy is not None and not math.isfinite(policy['max_failure_bound']):
         raise ValueError('auto_promotion bound must be finite')
     routing = value['routing']
-    if not isinstance(routing, dict) or set(routing) - set(catalog.load()['needs']) or any(not isinstance(v, str) or v not in ('Small', 'Medium', 'Large') for v in routing.values()):
-        raise ValueError('routing requires supported need -> Small/Medium/Large map')
-    # Hard independent checking and consequential review never downgrade through policy.
-    if any(routing.get(need, 'Large') != 'Large' for need in ('difficult_review', 'integration_architecture')):
-        raise ValueError('difficult_review/integration_architecture must retain Large')
+    if not isinstance(routing, dict) or set(routing) - set(catalog.load()['needs']):
+        raise ValueError('routing requires supported need map')
+    for need, entry in routing.items():
+        if typed_routing and not isinstance(entry,dict):
+            raise ValueError('new routing policy requires explicit mode baseline/floor and combo; legacy strings are read-only')
+        checked = routing_entry(entry)
+        if need in ('difficult_review', 'integration_architecture', 'specialist') and checked['combo'] != 'Large':
+            raise ValueError('critical needs must retain Large')
     return json.loads(json.dumps(value, allow_nan=False))
 
 
@@ -96,14 +123,14 @@ def schema():
                       mode=dict(enum=['off', 'shadow', 'on']), auto_evidence=dict(type='boolean'),
                       audit_every=dict(type='integer', minimum=1, maximum=1000),
                       routing=dict(type='object', additionalProperties=False, properties={
-                          need: dict(enum=['Large'] if need in ('difficult_review', 'integration_architecture') else ['Small', 'Medium', 'Large'])
+                          need: dict(type='object',additionalProperties=False,required=['mode','combo'],properties=dict(mode=dict(enum=['baseline','floor']),combo=dict(enum=['Large'] if need in ('difficult_review','integration_architecture','specialist') else ['Small','Medium','Large'])))
                           for need in catalog.load()['needs']}))
     policy = dict(type='object', additionalProperties=False, required=list(DEFAULTS), properties=properties)
     return dict(type='object', additionalProperties=False, required=['decision', 'policy', 'reason'],
                 properties=dict(decision=dict(enum=['approve', 'deny']),
                                 policy=dict(anyOf=[policy, dict(type='null')]),
                                 reason=dict(type='string', minLength=1)),
-                description='Crews policy only. Supported routine max_difficulty <=1; promotion >=3 train, >=5 holdout, bound <=.05. No code, command, model or credential authority.')
+                description='Crews policy only. Routing entries require explicit mode baseline/floor and combo. Use empty routing or baseline for ordinary need mapping; floor only for a deliberate minimum Combo. Static bounded/routine Small remains eligible under baseline Medium. Legacy string floors must be preserved as typed floor unless operator authorized migration. Routine max_difficulty <=1; promotion >=3 train, >=5 holdout, bound <=.05. No code, command, model or credential authority.')
 
 
 def decision(value):
@@ -114,4 +141,4 @@ def decision(value):
         raise ValueError('Large denied governance: ' + value['reason'])
     if value['decision'] != 'approve':
         raise ValueError('Large governance decision denied or malformed')
-    return validate(value['policy'])
+    return validate(value['policy'],typed_routing=True)

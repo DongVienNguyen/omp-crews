@@ -1,8 +1,17 @@
 # crews-omp
 
-Policy-gated Crews planning, classification and native OMP agents. AgentKit owns workflows; this plugin routes admitted crew roles, not main chat or unrelated native tasks. Plans bind model/effort, scoped tools, exact shell commands and completion receipts.
+Policy-gated Crews planning, classification and native OMP agents. AgentKit owns workflows; all delegated work uses canonical intake and admitted native crew references. Ordinary native selectors are refused, not remapped. Main chat model stays unchanged. Plans bind model/effort, scoped tools, exact shell commands and completion receipts.
 
 **[Hướng dẫn sử dụng đầy đủ bằng tiếng Việt](docs/usage.vi.md)** — cài từ Git, cấu hình Combo, vận hành không key, gia hạn tự động, copy/dán rule cho AI ngoài, cập nhật và xử lý lỗi.
+
+## Small capability routing and verified learning
+
+Routing separates baseline, capability and explicit floor. Legacy string mappings preserve their force floor until a fresh typed governance review. Modern feedback retains user label authority; verified Medium outcomes create opportunities, never Small labels. Cross-node proof references bind workflow and current immutable producer/checker attempts.
+
+Version1 capability APIs use `crew_capability`, bridge `capability`, or `crews-omp workflow capability_trial|capability_comparison|opportunities --project PATH --request FILE [--yes]`. Wrapper: `{version:1,operation,request}`. Opportunities support read-only report and signed review of family/version strategy. Trial prepare requires reviewed opportunity, signed isolated original snapshot, `everyday-cross-node-1.5-v1`, full safety facts,1–3files,1<difficulty<=1.5, producer without shell and independent later executable checker. Caps:1candidate/session,2/project/UTCday, no retry. Native refs execute only from their exact snapshot project. Cancellation/lease/owner policy/deployment changes revoke active ticket use. Deployment identity pins host configuration/model digests but cannot prove backend weights.
+
+Comparison freezes distinct producer treatment and identical checker/control per-role bindings before execution; token-primary or latency-primary objective is fixed. Source groups and original-content holdouts cannot cross training/comparison boundaries, including child snapshots. Learned deliveries audit only, never self-train; audit completion requires admitted token, and failure/unknown suspends. Legacy mapping strings stay force-preserved. Public CLI, local native/packaging checks and independent changed-contract review passed. Real provider Medium baseline and Small isolated trial both passed; canary latency increased1.308x, exceeding1.20gate, so frontier rollout stays NO_GO. Existing policy/modes unchanged; no recipe activated. See [native evidence and limits](plans/261029-0221-small-routing-learning-repair/native-results.md). One trial is not promotion or production-quality proof; no savings claim.
+
 
 ## Requirements
 
@@ -30,6 +39,8 @@ Setup is explicit and idempotent: it provisions private runtime and owner-marked
 
 Setup enables local-account Large policy governance by default. No private signing key, signed grant file or key migration is needed on a new machine/user installation. Provider login remains required. Automatic review can consume Large provider tokens. Local policy trusts the OS account running OMP, not cryptographic human identity; arbitrary same-user code that can modify state/code is outside this boundary.
 
+User-wide registration covers existing and future projects using that OMP user profile. Each project keeps independent policy, lease and learning evidence; a new project queues its initial Large review on first use. Named profiles require matching setup/doctor/profile paths. Disabled plugins, `--no-extensions`, explicit project disable and conflicting registrations are not silently overridden. This is session-driven execution, not a daemon or a guarantee of Small usage. See [global/profile operation and routing diagnostics](docs/usage.vi.md).
+
 Shared target options are `--python PATH`, `--agent-dir PATH`, `--state-dir PATH`, `--profile NAME` and `--json`. Use CLI `--help` for current flags. `CREWS_OMP_HOME` and `CREWS_OMP_AGENT_DIR` support isolated state and agent roots; choose same profile/paths for setup, doctor and later lifecycle operations. Do not accidentally share profile credentials/state. Relative OMP `PI_CONFIG_DIR` resolves against home, not current directory.
 
 ## Existing installs, upgrades and removal
@@ -45,6 +56,8 @@ node <package-root>/bin/crews-omp.mjs doctor --json
 Migration removes only owner-verified old extension/MCP/agents/skill registrations. Unknown modified files are refused rather than overwritten. `--expected-hashes FILE` accepts explicitly reviewed owned hashes (`{"files":{"absolute-path":"sha256"}}`), not blanket force. State, history and retry counters remain; incomplete runs never auto-replay.
 
 For upgrades, update package assets at linked root, rerun `setup` and `doctor`, then restart OMP. Existing policy and records remain. There is no `upgrade` subcommand.
+
+The current release is published on `main` of `DongVienNguyen/omp-crews`. Existing feature-branch clones should switch to `main` and use `git pull --ff-only origin main` only after preserving local changes; never force-reset them. Crews updates do not publish or patch a separate embedded host repository automatically.
 
 `uninstall --dry-run --json` previews removal; `uninstall --json` removes owned MCP/native registration transactionally while retaining state/config/history and provider credentials. Failed removal restores registration.
 
@@ -168,7 +181,7 @@ crews-omp recipes activate --project PATH --request SIGNED_REQUEST.json --yes --
 crews-omp recipes configure --project PATH --request SIGNED_REQUEST.json --yes --json
 ```
 
-No recipe is auto-registered/activated by installation; no old pilot label is imported. Exact user-labelled learning remains separate and unchanged. New versioned recipe tables share learning.sqlite; receipt/evidence-backed runs remain retention-protected. Main model and ordinary native tasks are unchanged. Use fresh OMP/MCP processes after package cutover; existing tickets never silently change recipe/model/policy.
+No recipe is auto-registered/activated by installation; no old pilot label is imported. Exact user-labelled learning remains separate and unchanged. New versioned recipe tables share learning.sqlite; receipt/evidence-backed runs remain retention-protected. Main model stays unchanged; delegation requires canonical intake or an admitted reference. Use fresh OMP/MCP processes after package cutover; existing tickets never silently change recipe/model/policy.
 
 `crew_evaluate` freezes an operator-signed unit manifest before runs: source groups cannot cross train/holdout, before/acceptance hashes bind each unit, and results must match fresh authoritative paired evidence. It reports per-family behavior and delivery, abstention from persisted policy decisions (not caller claims), complete-run cost, P95 and missing coverage. Any ambiguity/regression/missing accounting retains baseline; GO is never forced. Reusing old pilot outcomes as a newly frozen holdout is refused by timestamps.
 
@@ -246,7 +259,7 @@ Before first real cleanup keep a snapshot. Commands target active profile/state,
 
 `crew_runner` accepts `workflow_prepare`, `workflow_status`, `workflow_next`, `workflow_recheck`, and `workflow_recover`. CLI: `crews-omp workflow prepare|status|next|recheck|recover|attempts|evaluation --project PATH --request FILE [--yes]`. Prepare/next/recheck/recover require `--yes`; evaluation freeze/attest still require operator signatures. No new scheduler or automatic provider benchmark runs.
 
-Native OMP `crew_workflow` accepts `{request:{operation:"prepare"|"status"|"next"|"recheck"|"recover",slot,session,...}}`; mutating operations require `confirmed:true`. It reuses the same runner and returns exact `task {crew:...}` references. Startup guidance selects this path for multi-stage Crews coding; one-step work retains direct canonical intake. Ordinary native tasks and main model are not silently remapped.
+Native OMP `crew_workflow` accepts `{request:{operation:"prepare"|"status"|"next"|"recheck"|"recover",slot,session,...}}`; mutating operations require `confirmed:true`. It reuses the same runner and returns exact `task {crew:...}` references. Startup guidance selects this path for multi-stage Crews coding; one-step work retains direct canonical intake. Ordinary native delegation selectors are refused, not silently remapped; main model stays unchanged.
 
 For a wholly unexecuted workflow frozen by policy renewal, `workflow_recover` accepts explicit `snapshot:{old_policy,new_policy,old_sources,new_sources}` digests with `confirmed:true`. Compare-and-swap rejects stale values, changed model bindings, different installation, any admission/execution/retry history, and nodes outside pending/planned. Routing-code version may refresh only when every existing role recomputes to its original Combo/model/effort. It refreshes metadata on the same run IDs, retains original authority/criteria and all counters, and records old/new snapshot digests. It does not replay completed work or repair failed roles. Dead-reservation recovery remains unchanged. Run `check_workflow_snapshot_recovery.py` for snapshot, source acknowledgment, identity/counter preservation and history-refusal checks.
 

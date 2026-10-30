@@ -80,14 +80,14 @@ def check():
             receipt.count += 1
             pinned = outcomes.profile(checker, str(project), roles)
             producer = {'role_id': 'writer', 'agent_type': 'crew-produce-test', 'provider': 'test',
-                        'model': model, 'reasoning_effort': 'medium', 'routing_policy_version': 'policy-v1',
+                        'model': model, 'policy_combo': 'Small', 'reasoning_effort': 'medium', 'routing_policy_version': 'policy-v1',
                         'write_scope': [filename], 'acceptance': [invariant],
                         'input_fingerprints': {'before': 'source-'+unit}, 'evidence_unit': unit}
             if learned:
                 producer['recipe_id'] = 'learned-recipe'
             check_cell = {'role_id': 'verifier', 'agent_type': 'crew-check-test', 'provider': 'test',
                           'model': 'checker-v1', 'reasoning_effort': 'medium', 'verify_targets': ['writer'],
-                          'checker_profile': pinned, 'write_scope':[], 'read_scope':['verify.py',filename]}
+                          'checker_profile': pinned, 'acceptance': [invariant], 'write_scope':[], 'read_scope':['verify.py',filename]}
 
             def result(cell, paths):
                 return {'status': 'COMPLETE', 'host_authenticated':True, 'native': {'exitCode': 0,
@@ -109,11 +109,16 @@ def check():
             with closing(sqlite3.connect(state / 'runs.sqlite')) as db, db:
                 db.executescript('CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,project TEXT,plan TEXT);'
                                  'CREATE TABLE IF NOT EXISTS calls(run TEXT,role TEXT,status TEXT,result TEXT);')
+                from crews.attempt_ledger import initialize
+                initialize(db)
                 from crews.omp_adapter import canonical
                 db.execute('INSERT INTO runs VALUES(?,?,?)', (rid, canonical(str(project)), json.dumps({'waves': [
                     {'calls': [producer]}, {'calls': [check_cell]}]})))
                 db.execute('INSERT INTO calls VALUES(?,?,?,?)', (rid, 'writer', 'completed', json.dumps(producer_result)))
                 db.execute('INSERT INTO calls VALUES(?,?,?,?)', (rid, 'verifier', 'completed' if behavior != 'unknown' else 'failed', json.dumps(checker_result)))
+                import time
+                for cell,value,status in [(producer,producer_result,'completed'),(check_cell,checker_result,'completed' if behavior!='unknown' else 'failed')]:
+                    db.execute('INSERT INTO execution_attempts(run,role,ordinal,project,fault,is_repair,combo,cell,result,created) VALUES(?,?,?,?,?,?,?,?,?,?)',(rid,cell['role_id'],1,canonical(str(project)),'fixture',0,cell.get('policy_combo','Large'),json.dumps(cell),json.dumps(value),time.time()))
             return {'run': rid, 'producer': 'writer', 'checker': 'verifier'}
         receipt.count = 0
 
@@ -179,6 +184,11 @@ def check():
         duplicate = evidence(rid, 'same-source-bug')
         assert duplicate['duplicate'] and duplicate['train'] == 1
         reject(lambda: evidence(rid, 'same-source-bug', 'holdout'), 'cross train/holdout')
+        same_group=receipt('correlated-variant')
+        parent=outcomes.verified_pair(**{k:v for k,v in receipt('same-source-bug').items()},project=str(project),state=state)
+        variant=outcomes.verified_pair(**same_group,project=str(project),state=state)
+        with patch.object(outcomes,'verified_pair',return_value={**variant,'source_group':parent['source_group']}):
+            reject(lambda:call('evidence',recipe_id=rid,split='holdout',**same_group),'source group')
         evidence(rid, 'train-two')
         evidence(rid, 'train-three')
         evidence(rid, 'holdout-one', 'holdout')
@@ -195,16 +205,25 @@ def check():
         for index in range(9):
             assert call('lookup', role=renamed, roles=[renamed, checker])['effective_small']
         due = call('lookup', role=role, roles=roles)
-        assert due['audit_due'] and not due['effective_small']
+        assert due['audit_due'] and due['effective_small'] and due['audit_delivery_token']
         assert not call('lookup', role=role, roles=roles)['effective_small']
         duplicate_audit = call('audit', recipe_id=rid, split='train', **receipt('same-source-bug'))
         assert not duplicate_audit['audit_cleared'] and report(rid)['audit_pending']
-        unknown_audit = call('audit', recipe_id=rid, split='holdout', **receipt('audit-provider-error', 'unknown', execution='provider_error'))
-        assert unknown_audit['unknown'] == 0 and unknown_audit['failures'] == 0
-        assert report(rid)['audit_pending']
-        audit = call('audit', recipe_id=rid, split='holdout', **receipt('fresh-audit',learned=True))
+        unknown_ref=receipt('audit-provider-error','unknown',execution='provider_error')
+        reject(lambda:call('audit',recipe_id=rid,split='holdout',**unknown_ref),'delivery token')
+        with closing(sqlite3.connect(state/'learning.sqlite')) as db,db:
+            db.execute("UPDATE recipe_audit_deliveries SET state='admitted',run=?,role=? WHERE token=?",(unknown_ref['run'],'writer',due['audit_delivery_token']))
+        unknown_audit=call('audit',recipe_id=rid,split='holdout',**unknown_ref)
+        assert unknown_audit['state']=='suspended' and not report(rid)['audit_pending']
+        call('activate',recipe_id=rid)
+        with patch('crews.automation.audit_interval',return_value=1):
+            fresh_due=call('lookup',role=role,roles=roles)
+        fresh_ref=receipt('fresh-audit',learned=True)
+        with closing(sqlite3.connect(state/'learning.sqlite')) as db,db:
+            db.execute("UPDATE recipe_audit_deliveries SET state='admitted',run=?,role=? WHERE token=?",(fresh_ref['run'],'writer',fresh_due['audit_delivery_token']))
+        audit=call('audit',recipe_id=rid,split='holdout',**fresh_ref)
         assert audit['audit_cleared'] and not report(rid)['audit_pending']
-        assert call('lookup', role=role, roles=roles)['effective_small']
+        assert call('lookup',role=role,roles=roles)['effective_small']
         call('rollback', recipe_id=rid, reason='manual quality rollback')
         assert not call('lookup', role=role, roles=roles)['effective_small']
         evidence(rid, 'post-rollback')

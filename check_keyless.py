@@ -19,6 +19,67 @@ def review(ref,folder,decision=None,status='COMPLETE',authenticated=True):
     a.record(ref['run'],ref['role'],result,folder,ref['session'],folder,host_key=ticket['host_key'] if authenticated else None)
 
 
+def floor_transitions():
+    from crews import governance
+    floor=dict(mode='floor',combo='Medium')
+    baseline=dict(mode='baseline',combo='Medium')
+    lower=dict(mode='floor',combo='Small')
+    original={'bounded_retrieval':floor,'specialist':dict(mode='floor',combo='Large')}
+    cases=[]
+    for changed in (None,baseline,lower):
+        routing=copy.deepcopy(original)
+        if changed is None:del routing['bounded_retrieval']
+        else:routing['bounded_retrieval']=changed
+        cases.extend([(routing,None,False),(routing,routing,True)])
+    unrelated={**original,'bounded_retrieval':baseline,'specialist':dict(mode='baseline',combo='Large')}
+    cases.extend([(original,None,True),
+                  ({**original,'bounded_retrieval':lower},{**original,'bounded_retrieval':baseline},False),
+                  (unrelated,{**original,'bounded_retrieval':baseline},False),
+                  ({**original,'bounded_retrieval':baseline},original,False)])
+    for legacy in (False,True):
+        for approved,proposed,allowed in cases:
+            with tempfile.TemporaryDirectory(prefix='crews-floor-') as folder,isolated_home(folder):
+                auto.install(folder);auto.ensure(folder,folder)
+                policy=copy.deepcopy(governance.DEFAULTS)
+                policy.update(lease_seconds=3600,max_reviews=20,routing=copy.deepcopy(original))
+                ref=auto.next_review(folder,folder)
+                review(ref,folder,dict(decision='approve',policy=policy,reason='seed explicit floors'))
+                assert auto.next_review(folder,folder) is None
+                with auto.database(folder) as db:
+                    grant=db.execute('SELECT * FROM automation_grants').fetchone()
+                    gid=grant['id'];limits=json.loads(grant['request'])
+                    if legacy:
+                        limits['routing']={need:entry['combo'] for need,entry in original.items()}
+                        auto._save_grant(db,gid,limits)
+                    prior=copy.deepcopy(limits['routing'])
+                    if proposed is None:db.execute('UPDATE automation_grants SET used=20 WHERE id=?',(gid,))
+                if proposed is not None:
+                    packet=auto.dispatch(dict(operation='export',kind='policy'),folder,folder)
+                    packet['proposal']['routing']=copy.deepcopy(proposed)
+                    rejects(lambda:auto.dispatch(dict(operation='import',packet=packet,confirmed=False),folder,folder))
+                    queued=auto.dispatch(dict(operation='import',packet=packet,confirmed=True),folder,folder)
+                    assert queued['applied'] is False
+                ref=auto.next_review(folder,folder)
+                assert ref and ref.get('role')=='approve-automation',ref
+                with auto.database(folder) as db:
+                    job=db.execute('SELECT id,request FROM automation_jobs WHERE run=?',(ref['run'],)).fetchone()
+                    job_id=job['id'];frozen=json.loads(job['request'])
+                    if proposed is not None:
+                        assert frozen['external_proposal']['routing']==proposed
+                        assert job_id==queued['job_id']
+                review(ref,folder,dict(decision='approve',policy={**policy,'routing':approved},reason='review frozen floor transition'))
+                result=auto.finish(job_id,folder,folder)
+                assert result['state']==('applied' if allowed else 'blocked'),(legacy,approved,proposed,result)
+                with auto.database(folder) as db:
+                    current=json.loads(db.execute('SELECT request FROM automation_grants WHERE id=?',(gid,)).fetchone()[0])
+                assert current['routing']==(approved if allowed else prior)
+                assert current['epoch']==(2 if allowed else 1)
+                if not allowed:
+                    assert 'exact frozen operator proposal' in result['result']
+                    assert current['paused'] is True
+    print('PASS: explicit/legacy floor removal, baseline and lowering refused; exact frozen imports allowed; mismatched/unrelated migrations refused; unchanged floors retained')
+
+
 def run():
     with tempfile.TemporaryDirectory(prefix='crews-keyless-') as folder,isolated_home(folder):
         assert auto.dispatch({'operation':'status'},folder,folder)['enabled'] is False
@@ -35,11 +96,11 @@ def run():
         assert cell.get('automation_governance') and cell['policy_combo']=='Large' and not cell['write_scope'] and not cell['commands']
         from crews import governance
         policy=copy.deepcopy(governance.DEFAULTS)
-        policy.update(lease_seconds=3600,max_reviews=20,audit_every=3,routing={'bounded_retrieval':'Medium'})
+        policy.update(lease_seconds=3600,max_reviews=20,audit_every=3,routing={'bounded_retrieval':{'mode':'floor','combo':'Medium'}})
         decision=dict(decision='approve',policy=policy,reason='fixture evidence supports conservative local policy')
         review(ref,folder,decision)
         assert auto.next_review(folder,folder) is None
-        assert auto.routing_policy(folder,folder)=={'bounded_retrieval':'Medium'}
+        assert auto.routing_policy(folder,folder)=={'bounded_retrieval':{'mode':'floor','combo':'Medium'}}
         assert auto.audit_interval(folder,folder)==3
         from check_effort_policy import task_answers
         role=dict(name='lookup',kind='research',mission='Read existing project policy',deliverable='facts',scope=[],commands=[],acceptance=['Report existing project policy'],answers=dict(need='bounded_retrieval',difficulty=1,divisible=0,specific=1))
@@ -116,4 +177,6 @@ def run():
     print('PASS: keyless install, typed Large policy, lease/quota renewal, denial pause, malformed authority refusal, sticky disable and copied-state rejection')
 
 
-if __name__=='__main__':run()
+if __name__=='__main__':
+    run()
+    floor_transitions()

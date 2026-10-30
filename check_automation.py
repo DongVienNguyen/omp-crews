@@ -12,8 +12,9 @@ def reject(fn):
     raise AssertionError('expected refusal')
 
 
-def complete(plan,role,folder,status='COMPLETE'):
+def complete(plan,role,folder,status='COMPLETE',output=None):
     ticket=a.dispatch(plan['run_id'],role,folder,plan['session'],folder);cell=ticket['call'];token=ticket['token']
+    if output is not None:(Path(folder)/'target.py').write_text(output)
     wire=dict(token=token,role=role,provider=cell['provider'],model=cell['model'],effort=cell['reasoning_effort'])
     a.store_receipt(token,folder,wire,folder)
     if cell.get('checker_profile'):a.verify_profile(token,folder,folder,host_key=ticket['host_key'])
@@ -37,8 +38,7 @@ def run():
         def source(value):
             (p/'input.json').write_text(json.dumps({'value':value}));(p/'target.py').write_text('result=-999\n')
             plan=a.build_plan(dict(task='Double integer input',roles=[writer,checker]),task_answers('everyday_implementation',1,True),folder,'source-'+str(value),folder)
-            (p/'target.py').write_text('result='+str(value*2)+'\n')
-            complete(plan,'writer',folder);complete(plan,'checker',folder)
+            complete(plan,'writer',folder,output='result='+str(value*2)+'\n');complete(plan,'checker',folder)
             return plan
         source(0)
         status=auto.dispatch(dict(operation='status'),folder,folder)
@@ -68,48 +68,26 @@ def run():
         assert recipes.dispatch(dict(operation='status'),folder,folder)['recipes'][0]['state']=='active'
         writer['recipe_confirmed']=True
         for value in range(100,110):source(value)
-        ref=auto.next_review(folder,folder)
-        assert ref and ref['role']=='approve-automation',ref
-        with a.database(folder) as db:plan=a.load_run(db,ref['run'],folder,ref['session'])
-        complete(plan,ref['role'],folder)
         assert auto.next_review(folder,folder) is None
         row=recipes.dispatch(dict(operation='status'),folder,folder)['recipes'][0]
         assert row['audits']==1 and not row['audit_pending'] and row['state']=='active',row
         assert row['train']+row['holdout']==70,'learned or audit execution self-trained'
-        # A fresh audit review denied by Large remains blocked, never replayed.
-        for value in range(110,120):source(value)
-        ref=auto.next_review(folder,folder)
-        with a.database(folder) as db:plan=a.load_run(db,ref['run'],folder,ref['session'])
-        complete(plan,ref['role'],folder,status='FAILED')
-        reject(lambda:a.escalate(ref['run'],ref['role'],'retry denied automatic review',folder,ref['session'],True,folder))
-        denied=auto.next_review(folder,folder)
-        assert denied and 'blocked' in denied,denied
-        assert auto.next_review(folder,folder) is None
-        assert recipes.dispatch(dict(operation='status'),folder,folder)['recipes'][0]['audit_pending']
-        source(120)
-        ref=auto.next_review(folder,folder)
-        ticket=a.dispatch(ref['run'],ref['role'],folder,ref['session'],folder)
-        paused=auto.next_review(folder,folder)
-        assert 'blocked' in paused and 'admitted' in paused['blocked'],paused
-        used=auto.dispatch(dict(operation='status'),folder,folder)['grants'][0]['used']
-        assert auto.next_review(folder,folder)==paused
-        assert auto.dispatch(dict(operation='status'),folder,folder)['grants'][0]['used']==used
-        # Revocation stops effective routing and further automatic training.
+        # Checked audit deliveries settle directly; cancellation suspends without replay.
+        for value in range(110,119):source(value)
+        (p/'input.json').write_text('{"value":119}');(p/'target.py').write_text('result=-999\n')
+        plan=a.build_plan(dict(task='Double integer input',roles=[writer,checker]),task_answers('everyday_implementation',1,True),folder,'cancelled-audit',folder)
+        writer_cell=next(c for w in plan['waves'] for c in w['calls'] if c['role_id']=='writer')
+        assert writer_cell['audit_delivery_token']
+        complete(plan,'writer',folder,status='FAILED')
+        reject(lambda:a.escalate(plan['run_id'],'writer','retry forbidden audit',folder,plan['session'],True,folder))
+        row=recipes.dispatch(dict(operation='status'),folder,folder)['recipes'][0]
+        assert row['state']=='suspended' and row['train']+row['holdout']==70
         auto.dispatch(signer.approve(dict(operation='revoke',grant_id=gid),folder,folder),folder,folder)
-        reject(lambda:a.ticket(ticket['token'],folder,folder))
-        reject(lambda:a.dispatch(ref['run'],ref['role'],folder,ref['session'],folder))
         assert not auto.dispatch(dict(operation='status'),folder,folder)['enabled']
-        a.record(ref['run'],ref['role'],dict(status='FAILED',failure_kind='cancelled',verification=['Revoked host review terminated']),folder,ref['session'],folder,host_key=ticket['host_key'])
         source(7)
         row=recipes.dispatch(dict(operation='status'),folder,folder)['recipes'][0]
         assert row['train']+row['holdout']==70,row
         assert recipes.match(writer,folder,[writer,checker],folder)['reason']=='delegation_inactive'
-        # Expired review plans terminate without replay or wedging the queue.
-        with a.database(folder) as db:
-            db.execute('UPDATE runs SET created=? WHERE id=?',(time.time()-86401,ref['run']))
-        assert auto.next_review(folder,folder) is None
-        jobs=auto.dispatch(dict(operation='status'),folder,folder)['jobs']
-        assert next(j for j in jobs if j['run']==ref['run'])['state']=='blocked'
         # Nonzero checker without JSON stays unknown, but must suspend reuse/promotion.
         (p/'input.json').write_text('{"value":900}');(p/'target.py').write_text('result=-999\n')
         failed=a.build_plan(dict(task='Double integer input',roles=[writer,checker]),task_answers('everyday_implementation',1,True),folder,'unknown-checker',folder)
