@@ -22,15 +22,25 @@ export function parseRecommendation(text) {
 }
 
 export function contextFingerprint(project, role) {
- const root=path.resolve(project);
- const files=[...new Set([...(role.inputs??[]),...(role.scope??[])])].sort();
+ const root=fs.realpathSync(project);
+ const files=[...new Set([...(role.inputs??[]),...(role.read_scope??[]),...(role.scope??[])])].sort();
  if(files.length>128)throw Error('Classification context exceeds 128 declared artifact paths');
+ const inside=target=>{const relative=path.relative(root,target);return relative!=='..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative);};
+ const fingerprint=(target,ancestors=new Set())=>{
+  if(!fs.existsSync(target))return null;
+  const real=fs.realpathSync(target);
+  if(!inside(real))throw Error('Classification artifact escapes project');
+  if(ancestors.has(real))throw Error('Classification artifact link cycle');
+  if(fs.statSync(real).isDirectory()){
+   const next=new Set(ancestors);next.add(real);
+   return fs.readdirSync(target).sort().map(name=>[name,fingerprint(path.join(target,name),next)]);
+  }
+  if(!fs.statSync(real).isFile())throw Error('Unsupported classification artifact');
+  return createHash('sha256').update(fs.readFileSync(target)).digest('hex');
+ };
  return createHash('sha256').update(JSON.stringify(files.map(name=>{
-  if(typeof name!=='string'||path.isAbsolute(name)||name.split(/[\\/]/).includes('..'))throw Error('Classification artifact must be project-relative');
-  const target=path.resolve(root,name);
-  if(fs.existsSync(target)&&!path.relative(fs.realpathSync(root),fs.realpathSync(target)).startsWith('..')&&fs.statSync(target).isFile())return [name,createHash('sha256').update(fs.readFileSync(target)).digest('hex')];
-  if(fs.existsSync(target)&&path.relative(fs.realpathSync(root),fs.realpathSync(target)).startsWith('..'))throw Error('Classification artifact escapes project');
-  return [name,null];
+  if(typeof name!=='string'||path.isAbsolute(name)||/^[a-z]:/i.test(name)||name.split(/[\\/]/).includes('..'))throw Error('Classification artifact must be project-relative');
+  return [name,fingerprint(path.resolve(root,name))];
  }))).digest('hex');
 }
 
@@ -40,7 +50,7 @@ export class Classifier {
  async recommend(role, project, session, policyVersion, config, signal, context, fresh=false){
   if(signal?.aborted)return {outcome:'requires_classification',recommendation:null,cacheHit:false,latencyMs:0,reason:'Classifier canceled'};
   if(config.mode==='off')return {outcome:'off',recommendation:null,cacheHit:false,latencyMs:0};
-  const input={objective:role.mission,solution_space:role.solution_space??'',facts:role.facts??{},kind:role.kind,authority:role.authority??[],acceptance:role.acceptance??role.criteria??[],inputs:role.inputs??[],scope:role.scope??[],commands:role.commands??[]};
+  const input={objective:role.mission,solution_space:role.solution_space??'',facts:role.facts??{},kind:role.kind,risk:role.risk??null,capability_reason:role.capability_reason??null,prior_attempt:role.prior_attempt??null,authority:role.authority??[],acceptance:role.acceptance??role.criteria??[],inputs:role.inputs??[],read_scope:role.read_scope??[],scope:role.scope??[],commands:role.commands??[]};
   if(JSON.stringify(input).length>16000)throw Error('Classification brief exceeds 16000 characters; provide bounded role facts');
   const key=JSON.stringify([project,session,input,config.model,CLASSIFIER_PROMPT,NEEDS,policyVersion,contextFingerprint(project,role)]);
   const configKey=JSON.stringify(config);
@@ -58,6 +68,7 @@ export class Classifier {
    controller.signal.throwIfAborted();
    const response=await Promise.race([this.request({model:config.model,prompt:CLASSIFIER_PROMPT,input,maxTokens:config.maxTokens,signal:controller.signal,context}),deadline,canceled]);
    if(current!==this.generation)throw Error('Classifier result stale after reload');
+   if(key!==JSON.stringify([project,session,input,config.model,CLASSIFIER_PROMPT,NEEDS,policyVersion,contextFingerprint(project,role)]))throw Error('Classifier context changed during request');
    if(response.stopReason&&response.stopReason!=='stop')throw Error('Classifier output incomplete: '+response.stopReason);
    const recommendation=parseRecommendation(response.text);
    const result={outcome:config.mode==='shadow'?'shadow':'recommended',recommendation,cacheHit:false,latencyMs:Date.now()-started,usage:response.usage??null};

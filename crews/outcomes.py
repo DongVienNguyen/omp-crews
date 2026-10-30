@@ -16,23 +16,29 @@ def digest(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 
-def fingerprints(project, paths):
+def fingerprints(project, paths, *, exclude=()):
     root=Path(project).resolve();result={}
+    excluded=[(root / name).resolve() for name in exclude]
     def fingerprint(path, ancestors=frozenset()):
         try:resolved=path.resolve()
         except (OSError,RuntimeError) as exc:raise ValueError('evidence link cycle') from exc
         if not resolved.is_relative_to(root):raise ValueError('evidence path escapes project via link')
+        if any(resolved.is_relative_to(target) for target in excluded):return 'writable'
         link=os.readlink(path) if path.is_symlink() else None
         if resolved.is_dir():
             if resolved in ancestors:raise ValueError('evidence link cycle')
             children=[]
             for child in sorted(path.iterdir(),key=lambda item:item.name):
+                if any(child.resolve().is_relative_to(target) for target in excluded):continue
                 kind='link' if child.is_symlink() else 'directory' if child.is_dir() else 'file'
-                children.append([child.name,kind,fingerprint(child,ancestors|{resolved})])
+                value=fingerprint(child,ancestors|{resolved})
+                if value=='writable-parent':continue
+                children.append([child.name,kind,value])
+            if not children and any(target.is_relative_to(resolved) for target in excluded):return 'writable-parent'
             value='directory:'+digest(children)
         elif resolved.is_file():
             with resolved.open('rb') as source:value=hashlib.file_digest(source,'sha256').hexdigest()
-        elif not resolved.exists():value=None
+        elif not resolved.exists():value='writable-parent' if any(target.is_relative_to(resolved) for target in excluded) else None
         else:raise ValueError('unsupported evidence file type')
         return digest(['link',link,value]) if link is not None else value
     for name in dict.fromkeys(paths):

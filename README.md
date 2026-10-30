@@ -22,6 +22,8 @@ Comparison freezes distinct producer treatment and identical checker/control per
 
 Windows lifecycle has recorded verification. Linux/macOS need equivalent lifecycle validation before claiming support.
 
+Managed agents require strict native `yield` even when caller disables `task.structured`. Load the package root (`-e <absolute-package-root>`) for one-off native sessions, not only `extension.ts`: agent discovery follows package roots and needs `agents/`. A file-only extension may register tools without managed agent definitions. Plain JSON text is never an approval receipt. Keep failed governance jobs; use explicit local enable to queue a fresh host-frozen review after correcting runtime setup.
+
 ## Install and setup
 
 Keep checkout or extracted package at a permanent path:
@@ -264,6 +266,8 @@ Native OMP `crew_workflow` accepts `{request:{operation:"prepare"|"status"|"next
 For a wholly unexecuted workflow frozen by policy renewal, `workflow_recover` accepts explicit `snapshot:{old_policy,new_policy,old_sources,new_sources}` digests with `confirmed:true`. Compare-and-swap rejects stale values, changed model bindings, different installation, any admission/execution/retry history, and nodes outside pending/planned. Routing-code version may refresh only when every existing role recomputes to its original Combo/model/effort. It refreshes metadata on the same run IDs, retains original authority/criteria and all counters, and records old/new snapshot digests. It does not replay completed work or repair failed roles. Dead-reservation recovery remains unchanged. Run `check_workflow_snapshot_recovery.py` for snapshot, source acknowledgment, identity/counter preservation and history-refusal checks.
 
 Workflow preparation records installation identity and effective routes for every node. Legacy manifests missing either cannot use snapshot refresh; no provenance is inferred retroactively. Refresh never advances pending work or creates runs; call `next` separately after inspecting recovered status. Prepare-time identity permits expired `local:null` to renew only to the same recorded installation. Disabled current authority remains refused.
+
+For a recorded failed node, confirmed `workflow_recover` may additionally name exact `node` and `run` with the same four snapshot digests. This branch refuses unchanged snapshots, route/model changes, active/unknown ownership, exhausted repair/pending-call budget, stale output fingerprints and immutable-source changes after completed evidence. It records append-only `run_renewals`, preserving original run creation, failures and counters; renewal expires after24hours. Node remains failed and returns no dispatch until separate charged repair. This is authority renewal, not approval, replay or quota reset. `check_failed_workflow_recovery.py` exercises these boundaries; independent review is required before using a newly changed recovery implementation on live work.
 
 Operator-authorized legacy adoption is separate from historical recovery: add `adoption:{manifest:<exact original manifest digest>,provenance_unknown:true}` to the same confirmed snapshot request. Only wholly unexecuted legacy manifests qualify. Original manifest is retained in immutable `workflow_adoptions`; current installation/routes are admitted from now, not asserted historically. Same IDs, original authority/acceptance and all counters remain. No automatic advance, replay or repeat adoption. `check_workflow_adoption.py` exercises this boundary.
 

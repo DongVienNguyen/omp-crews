@@ -13,7 +13,9 @@ import sqlite3
 import tempfile
 from unittest.mock import patch
 
-from crews import outcomes, recipes
+from crews import outcomes, recipes, omp_adapter as adapter
+from crews.classification import policy_version
+from check_effort_policy import isolated_home, task_answers
 from approval_fixture import Signer
 
 
@@ -30,7 +32,7 @@ def reject(call, contains=None):
 def check():
     passed = []
     signer=Signer()
-    with tempfile.TemporaryDirectory(prefix='crews-recipes-') as directory:
+    with tempfile.TemporaryDirectory(prefix='crews-recipes-') as directory, isolated_home(Path(directory)/'state'):
         base = Path(directory)
         project = base / 'project'
         project.mkdir()
@@ -42,7 +44,7 @@ def check():
         invariant = 'normal/error/boundary preserved'
         features = {'domain': 'serialization', 'language': 'python', 'operation': 'mapping',
                     'invariant': invariant, 'dependency_shape': 'single_component'}
-        binding = outcomes.digest({'provider': 'test', 'model': 'small-v1', 'effort': 'medium', 'policy': 'policy-v1'})
+        binding = outcomes.digest({'provider': 'test', 'model': 'small-v1', 'effort': 'medium', 'policy': policy_version(), 'revision': 'small-revision'})
         profile = {'input': 'verify.py', 'command': command}
         facts = {**dict.fromkeys(recipes.TRUE_FACTS, True), **dict.fromkeys(recipes.FALSE_FACTS, False),
                  'deterministic_check': True}
@@ -50,7 +52,8 @@ def check():
                 'scope': ['target.py'], 'inputs': ['target.py'], 'commands': [],
                 'answers': {'need': 'everyday_implementation', 'difficulty': 1, 'divisible': 0},
                 'facts': facts, 'routine_check': 'verifier', 'acceptance': [invariant],
-                'recipe_features': features, 'recipe_profile': profile, 'model_binding': binding}
+                'recipe_features': features, 'recipe_profile': profile, 'model_binding': binding,
+                'model_revision': 'small-revision'}
         checker = {'name': 'verifier', 'kind': 'check', 'scope': [],
                    'inputs': ['target.py', 'renamed.py', 'verify.py'], 'commands': [command],
                    'criteria': [invariant], 'checker_profile': {**profile, 'version': '1'}}
@@ -74,17 +77,18 @@ def check():
         def report(rid):
             return next(item for item in call('report')['recipes'] if item['recipe_id'] == rid)
 
-        def receipt(unit, behavior='pass', model='small-v1', learned=False, filename='target.py', execution='completed'):
+        def receipt(unit, behavior='pass', model='small-v1', learned=False, filename='target.py', execution='completed', current_role=None):
             """Persist synthetic admitted receipt; real verifier validates linkage/hashes."""
             rid = hashlib.sha256((unit + str(receipt.count)).encode()).hexdigest()
             receipt.count += 1
             pinned = outcomes.profile(checker, str(project), roles)
             producer = {'role_id': 'writer', 'agent_type': 'crew-produce-test', 'provider': 'test',
-                        'model': model, 'policy_combo': 'Small', 'reasoning_effort': 'medium', 'routing_policy_version': 'policy-v1',
+                        'model': model, 'policy_combo': 'Small', 'reasoning_effort': 'medium', 'routing_policy_version': routing_version,
+                        'model_revision': 'small-revision', 'recipe_features': (current_role or role)['recipe_features'],
                         'write_scope': [filename], 'acceptance': [invariant],
                         'input_fingerprints': {'before': 'source-'+unit}, 'evidence_unit': unit}
             if learned:
-                producer['recipe_id'] = 'learned-recipe'
+                producer['recipe_id'] = learned if isinstance(learned, str) else 'learned-recipe'
             check_cell = {'role_id': 'verifier', 'agent_type': 'crew-check-test', 'provider': 'test',
                           'model': 'checker-v1', 'reasoning_effort': 'medium', 'verify_targets': ['writer'],
                           'checker_profile': pinned, 'acceptance': [invariant], 'write_scope':[], 'read_scope':['verify.py',filename]}
@@ -105,37 +109,39 @@ def check():
                 checker_result['tool_receipts'] = []
             checker_result['outcome'] = outcomes.derive(check_cell, checker_result, str(project))
             assert checker_result['outcome']['behavior'] == behavior
-            state.mkdir(exist_ok=True)
-            with closing(sqlite3.connect(state / 'runs.sqlite')) as db, db:
-                db.executescript('CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,project TEXT,plan TEXT);'
-                                 'CREATE TABLE IF NOT EXISTS calls(run TEXT,role TEXT,status TEXT,result TEXT);')
-                from crews.attempt_ledger import initialize
-                initialize(db)
-                from crews.omp_adapter import canonical
-                db.execute('INSERT INTO runs VALUES(?,?,?)', (rid, canonical(str(project)), json.dumps({'waves': [
+            with adapter.database(state) as db:
+                db.execute('INSERT INTO runs VALUES(?,?,?,?,?)', (rid, adapter.canonical(str(project)), 'fixture', __import__('time').time(), json.dumps({'waves': [
                     {'calls': [producer]}, {'calls': [check_cell]}]})))
-                db.execute('INSERT INTO calls VALUES(?,?,?,?)', (rid, 'writer', 'completed', json.dumps(producer_result)))
-                db.execute('INSERT INTO calls VALUES(?,?,?,?)', (rid, 'verifier', 'completed' if behavior != 'unknown' else 'failed', json.dumps(checker_result)))
+                db.execute('INSERT INTO calls VALUES(?,?,?,?,?)', (rid, 'writer', '', 'completed', json.dumps(producer_result)))
+                db.execute('INSERT INTO calls VALUES(?,?,?,?,?)', (rid, 'verifier', '', 'completed' if behavior != 'unknown' else 'failed', json.dumps(checker_result)))
                 import time
                 for cell,value,status in [(producer,producer_result,'completed'),(check_cell,checker_result,'completed' if behavior!='unknown' else 'failed')]:
-                    db.execute('INSERT INTO execution_attempts(run,role,ordinal,project,fault,is_repair,combo,cell,result,created) VALUES(?,?,?,?,?,?,?,?,?,?)',(rid,cell['role_id'],1,canonical(str(project)),'fixture',0,cell.get('policy_combo','Large'),json.dumps(cell),json.dumps(value),time.time()))
+                    db.execute('INSERT INTO execution_attempts(run,role,ordinal,project,fault,is_repair,combo,cell,result,created) VALUES(?,?,?,?,?,?,?,?,?,?)',(rid,cell['role_id'],1,adapter.canonical(str(project)),'fixture',0,cell.get('policy_combo','Large'),json.dumps(cell),json.dumps(value),time.time()))
             return {'run': rid, 'producer': 'writer', 'checker': 'verifier'}
         receipt.count = 0
 
         def evidence(rid, unit, split='train', **kwargs):
             return call('evidence', recipe_id=rid, split=split, **receipt(unit, **kwargs))
 
-        def ready(rid, prefix):
+        def ready(rid, prefix, **kwargs):
             for index in range(3):
-                evidence(rid, prefix + '-train-' + str(index))
+                evidence(rid, prefix + '-train-' + str(index), **kwargs)
             for index in range(2):
-                evidence(rid, prefix + '-holdout-' + str(index), 'holdout')
+                evidence(rid, prefix + '-holdout-' + str(index), 'holdout', **kwargs)
 
         assert recipes.match(role, str(project), roles, state)['mode'] == 'shadow'
         assert not state.exists(), 'read-only lookup created state'
         for confirmation in (None, False, 1, 'true'):
             reject(lambda: recipes.dispatch({'operation': 'configure', 'confirmed': confirmation, 'mode': 'on'}, str(project), state), 'confirmed')
         assert not state.exists()
+        state.mkdir()
+        (state / 'policy.json').write_text(json.dumps({'provider': 'test', 'combos': {
+            name: {'model': 'small-v1' if name == 'Small' else name.lower()+'-v1', 'effort': 'Auto'}
+            for name in adapter.COMBOS}}), encoding='utf-8')
+        with isolated_home(state):
+            routing_version = policy_version()
+        binding = outcomes.digest({'provider':'test','model':'small-v1','effort':'medium','policy':routing_version,'revision':'small-revision'})
+        role['model_binding'] = recipe['model_binding'] = binding
         rid = register()
         assert (state / 'learning.sqlite').is_file()
         with closing(sqlite3.connect(state / 'learning.sqlite')) as db, db:
@@ -179,6 +185,24 @@ def check():
         passed.append('wording/filename-independent retrieval; OOD, all safety facts, scope, checker/invariant guards')
 
         reject(lambda: call('activate', recipe_id=rid), '3 train')
+        reject(lambda: evidence(rid, 'manual-unrelated-family', current_role=ood), 'family binding')
+        assert report(rid)['train'] == report(rid)['holdout'] == 0
+        legacy_ref = receipt('legacy-no-attempts')
+        legacy_state = base / 'legacy-state'
+        legacy_state.mkdir()
+        with closing(sqlite3.connect(state / 'runs.sqlite')) as source, closing(sqlite3.connect(legacy_state / 'runs.sqlite')) as legacy:
+            source.backup(legacy)
+            with legacy:
+                legacy.execute('DROP TABLE execution_attempts')
+        with closing(sqlite3.connect(state / 'learning.sqlite')) as source, closing(sqlite3.connect(legacy_state / 'learning.sqlite')) as legacy:
+            source.backup(legacy)
+        legacy_proof = outcomes.verified_pair(**legacy_ref, project=str(project), state=legacy_state)
+        reject(lambda: recipes._producer(legacy_proof, str(project), legacy_state), 'canonical attempt source')
+        with patch.object(outcomes, 'verified_pair', return_value=legacy_proof):
+            reject(lambda: call('evidence', recipe_id=rid, split='train', **legacy_ref), 'canonical attempt source')
+        reject(lambda: recipes.capture(**legacy_ref, project=str(project), state=legacy_state), 'canonical attempt source')
+        assert report(rid)['train'] == report(rid)['holdout'] == 0
+        passed.append('manual evidence rejects unrelated family; legacy pair without canonical attempts refuses evidence and capture')
         first = evidence(rid, 'same-source-bug')
         assert first['train'] == 1
         duplicate = evidence(rid, 'same-source-bug')
@@ -218,7 +242,7 @@ def check():
         call('activate',recipe_id=rid)
         with patch('crews.automation.audit_interval',return_value=1):
             fresh_due=call('lookup',role=role,roles=roles)
-        fresh_ref=receipt('fresh-audit',learned=True)
+        fresh_ref=receipt('fresh-audit',learned=rid)
         with closing(sqlite3.connect(state/'learning.sqlite')) as db,db:
             db.execute("UPDATE recipe_audit_deliveries SET state='admitted',run=?,role=? WHERE token=?",(fresh_ref['run'],'writer',fresh_due['audit_delivery_token']))
         audit=call('audit',recipe_id=rid,split='holdout',**fresh_ref)
@@ -331,6 +355,102 @@ def check():
             assert db.execute('SELECT value FROM exact_preserved').fetchone()[0] == 'unchanged'
             assert {row[0] for row in db.execute('SELECT DISTINCT source FROM recipe_v1_evidence')} == {'independent_checker'}
         passed.append('existing exact tables untouched; only independent_checker machine evidence stored')
+        linkage = copy.deepcopy(recipe)
+        linkage['features']['domain'] = 'lifecycle'
+        linkage['applicability'] = {'domain': 'lifecycle'}
+        linked_role = copy.deepcopy(role)
+        linked_role.update(recipe_features=linkage['features'], recipe_confirmed=True, deliverable='target.py')
+        linked_checker = copy.deepcopy(checker)
+        linked_checker.update(name='mapping-check', mission='Check mapping boundary behavior', answers={'need':'mechanical_verification','difficulty':1,'divisible':0}, deliverable='verdict')
+        linked_role['routine_check']='mapping-check'
+        linked_roles = [linked_role, linked_checker]
+        linked = register(body=linkage, current_role=linked_role, current_roles=linked_roles)
+        ready(linked, 'lifecycle-ready', current_role=linked_role)
+        call('activate', recipe_id=linked)
+
+        def planned():
+            with isolated_home(state):
+                plan = adapter.build_plan({'task':'Fix fixed mapping', 'roles':linked_roles},
+                    task_answers('everyday_implementation', 1, True), str(project), 'linkage', state)
+            cell = next(c for w in plan['waves'] for c in w['calls'] if c['role_id']=='writer')
+            assert cell['recipe_id']==linked and cell['policy_combo']=='Small', cell['recipe_evidence']
+            return plan
+
+        def dispatch(plan):
+            return adapter.dispatch(plan['run_id'], 'writer', str(project), 'linkage', state)
+
+        recovery = planned()
+        recovery_id = recovery['run_id']
+        original = copy.deepcopy(next(c for w in recovery['waves'] for c in w['calls'] if c['role_id']=='writer'))
+        dispatch(recovery)
+        adapter.record(recovery_id, 'writer', {'status':'FAILED', 'verification':['bounded failure']}, str(project), 'linkage', state)
+        with adapter.database(state) as db:
+            failed_plan = adapter.load_run(db, recovery_id, str(project), 'linkage')
+        failed_cell = next(c for w in failed_plan['waves'] for c in w['calls'] if c['role_id']=='writer')
+        for guard in ('trial_id', 'audit_delivery_token'):
+            failed_cell[guard] = 'consumed'
+            with adapter.database(state) as db:
+                db.execute('UPDATE runs SET plan=? WHERE id=?', (json.dumps(failed_plan), recovery_id))
+            for repair in (False, True):
+                reject(lambda: adapter.escalate(recovery_id, 'writer', 'retry', str(project), 'linkage', repair=repair, state=state), 'retry forbidden')
+            failed_cell.pop(guard)
+        with adapter.database(state) as db:
+            db.execute('UPDATE runs SET plan=? WHERE id=?', (json.dumps(failed_plan), recovery_id))
+        escalated = adapter.escalate(recovery_id, 'writer', 'explicit next Combo', str(project), 'linkage', state=state)['call']
+        assert escalated['policy_combo']=='Medium'
+        recipes.validate_delivery(escalated, str(project), state)
+        assert not any(key in escalated for key in ('recipe_id', 'recipe_role', 'recipe_roles', 'recipe_evidence', 'audit_delivery_token'))
+        assert 'Untrusted approved recipe guidance' not in escalated['prompt'] and linkage['recipe_steps'][0] not in escalated['prompt']
+        for key in ('write_scope', 'read_scope', 'acceptance', 'commands', 'role_answers', 'input_fingerprints', 'local_policy_snapshot'):
+            assert escalated[key]==original[key], key
+        next_admission = dispatch(recovery)
+        adapter.ticket(next_admission['token'], str(project), state)
+        adapter.record(recovery_id, 'writer', {'status':'FAILED', 'verification':['Medium failure']}, str(project), 'linkage', state)
+        for index in range(2):
+            repaired = adapter.escalate(recovery_id, 'writer', 'bounded repair', str(project), 'linkage', repair=True, state=state)['call']
+            assert repaired['policy_combo']=='Medium'
+            dispatch(recovery)
+            adapter.record(recovery_id, 'writer', {'status':'FAILED', 'verification':['repair failed']}, str(project), 'linkage', state)
+        reject(lambda: adapter.escalate(recovery_id, 'writer', 'third repair', str(project), 'linkage', repair=True, state=state), 'budget exhausted')
+        with adapter.database(state) as db:
+            assert db.execute('SELECT escalations,repairs FROM attempts WHERE run=? AND role=?', (recovery_id, 'writer')).fetchone()==(1,2)
+            db.execute('INSERT INTO attempts VALUES(?,?,?,?)', (recovery_id, 'budget-fixture', 3, 0))
+        reject(lambda: adapter.escalate(recovery_id, 'writer', 'fifth escalation', str(project), 'linkage', state=state), 'budget exhausted')
+        passed.append('explicit recipe escalation admits Medium without recipe authority/guidance; original scope/criteria and trial/audit/run caps preserved')
+        pending = planned()
+        call('rollback', recipe_id=linked, reason='pending plan rollback')
+        reject(lambda:dispatch(pending), 'recipe')
+        call('activate', recipe_id=linked)
+        admitted = dispatch(pending)
+        hits = report(linked)['hits']
+        adapter.ticket(admitted['token'], str(project), state)
+        adapter.ticket(admitted['token'], str(project), state)
+        assert report(linked)['hits']==hits
+        call('suspend', recipe_id=linked, reason='ticket suspension')
+        reject(lambda:adapter.ticket(admitted['token'], str(project), state), 'recipe')
+        call('activate', recipe_id=linked)
+        adapter.ticket(admitted['token'], str(project), state)
+        newer = register(version=2, body=linkage, current_role=linked_role, current_roles=linked_roles)
+        reject(lambda:adapter.ticket(admitted['token'], str(project), state), 'recipe')
+        passed.append('recipe rollback blocks planned admission; suspension/new version blocks ticket; unchanged ticket consumes no hits')
+
+        # Same profile/model, unrelated families: only source producer family owns capture.
+        before = report(auto_capture)
+        ref = receipt('family-specific-capture', current_role=linked_role)
+        captured = recipes.capture(**ref, project=str(project), state=state)
+        assert captured['captured']==2
+        assert report(auto_capture)==before
+        call('activate', recipe_id=auto_capture)
+        with patch('crews.automation.audit_interval', return_value=1):
+            intended = call('lookup', role=role, roles=roles)
+        audit_ref = receipt('exact-family-audit', learned=auto_capture)
+        with closing(sqlite3.connect(state/'learning.sqlite')) as db, db:
+            db.execute("UPDATE recipe_audit_deliveries SET state='admitted',run=?,role=? WHERE token=?", (audit_ref['run'],'writer',intended['audit_delivery_token']))
+            db.execute('UPDATE recipe_v1_recipes SET audit_pending=1 WHERE id=?', (rid,))
+        assert recipes.capture(**audit_ref, project=str(project), state=state)['captured']==1
+        assert report(auto_capture)['audits']==1 and not report(auto_capture)['audit_pending']
+        assert report(rid)['audit_pending'] and report(rid)['audits']==1
+        passed.append('authoritative producer family isolates nonlearned capture; exact learned recipe clears only its admitted audit')
         gc.collect()  # outcomes verifier uses sqlite context manager; collect its closed-scope handles.
     return passed
 

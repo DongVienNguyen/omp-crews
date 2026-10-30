@@ -18,6 +18,9 @@ def _schema(db):
     db.execute('CREATE TABLE IF NOT EXISTS workflow_adoptions(workflow TEXT PRIMARY KEY,previous_manifest TEXT NOT NULL,current_policy TEXT NOT NULL,current_sources TEXT NOT NULL,adopted_at REAL NOT NULL)')
     db.execute("CREATE TRIGGER IF NOT EXISTS workflow_adoptions_no_update BEFORE UPDATE ON workflow_adoptions BEGIN SELECT RAISE(ABORT,'adoption history immutable'); END")
     db.execute("CREATE TRIGGER IF NOT EXISTS workflow_adoptions_no_delete BEFORE DELETE ON workflow_adoptions BEGIN SELECT RAISE(ABORT,'adoption history immutable'); END")
+    db.execute('CREATE TABLE IF NOT EXISTS run_renewals(id INTEGER PRIMARY KEY,run TEXT NOT NULL,workflow TEXT NOT NULL,previous TEXT NOT NULL,current TEXT NOT NULL,expires REAL NOT NULL,created REAL NOT NULL)')
+    for operation in ('UPDATE','DELETE'):
+        db.execute("CREATE TRIGGER IF NOT EXISTS run_renewals_no_"+operation.lower()+" BEFORE "+operation+" ON run_renewals BEGIN SELECT RAISE(ABORT,'renewal history immutable'); END")
 
 
 def _paths(value, project, label):
@@ -48,7 +51,7 @@ def _policy(project, state):
     from crews import omp_adapter as a
     from crews.automation import policy_snapshot
     from crews.classification import policy_version
-    return dict(model=a.policy_binding(state), routing=policy_version(), local=policy_snapshot(project, state))
+    return dict(model=a.policy_binding(state), routing=policy_version(state), local=policy_snapshot(project, state))
 
 
 def _validate(spec, project):
@@ -339,6 +342,66 @@ def _installation_id(state):
     value = installation(state)
     return value['identity'] if value else None
 
+def _recover_failed_snapshot(db, manifest, project, state, request):
+    """Renew authority only; recorded failure still requires charged explicit repair."""
+    from crews import omp_adapter as a
+    current = _policy(project, state)
+    sources = _sources(project, manifest['spec'])
+    actual = dict(old_policy=digest(manifest['policy']), new_policy=digest(current), old_sources=digest(manifest['sources']), new_sources=digest(sources))
+    if request.get('snapshot') != actual:
+        raise ValueError('failed snapshot recovery requires exact old/new policy and source digests')
+    if actual['old_policy'] == actual['new_policy'] and actual['old_sources'] == actual['new_sources']:
+        raise ValueError('failed recovery requires changed policy or source snapshot')
+    before, after = manifest['policy'].get('local'), current.get('local')
+    installed = manifest.get('installation_id') or (before or {}).get('installation_id')
+    if manifest['policy']['model'] != current['model'] or not after or not installed or installed != after['installation_id'] or installed != _installation_id(state) or after['policy_binding'] != current['model'] or (before and after['epoch'] < before['epoch']):
+        raise ValueError('failed recovery requires live same-installation same-model policy renewal')
+    if not manifest.get('routes') or manifest['routes'] != _route_snapshot(manifest['spec'], project, state):
+        raise ValueError('failed recovery requires unchanged frozen routes')
+    rows = _rows(db, manifest)
+    target = rows.get(request.get('node'))
+    if not target or target['state'] != 'failed' or target['run'] != request.get('run'):
+        raise ValueError('failed recovery requires exact recorded failed node/run')
+    if any(row['state'] not in ('pending','planned','failed','completed','invalidated') for row in rows.values()):
+        raise ValueError('failed recovery refuses active or unknown ownership')
+    if any(call[1] not in ('planned','failed','completed') for row in rows.values() for call in row['calls']):
+        raise ValueError('failed recovery refuses active or unknown call ownership')
+    if actual['old_sources'] != actual['new_sources'] and any(row['state'] == 'completed' or any(call[1] == 'completed' for call in row['calls']) for row in rows.values()):
+        raise ValueError('failed recovery cannot reuse completed evidence after immutable source change')
+    used, repairs, escalations = db.execute('SELECT used,repairs,escalations FROM workflows WHERE id=?',(manifest['id'],)).fetchone()
+    pending = sum(row['cells'] for row in rows.values() if row['state'] == 'pending')
+    if repairs >= 2 or used + pending + 1 > manifest['spec']['max_calls']:
+        raise ValueError('failed recovery cannot refresh exhausted repair history')
+    _validate_artifacts(db, manifest)
+    previous = json.dumps(manifest)
+    plans = []
+    for row in rows.values():
+        if not row['run'] or row['state'] == 'completed':
+            continue
+        if db.execute("SELECT 1 FROM calls WHERE run=? AND status='admitted'",(row['run'],)).fetchone():
+            raise ValueError('failed recovery refuses admitted role')
+        raw = db.execute('SELECT plan FROM runs WHERE id=?',(row['run'],)).fetchone()
+        if not raw:raise ValueError('failed recovery missing original run')
+        plan = json.loads(raw[0])
+        for wave in plan['waves']:
+            for cell in wave['calls']:
+                node = next(n for n in manifest['spec']['nodes'] if n['id'] == cell['node_id'])
+                role = next(r for r in node['roles'] if r['name'] == cell['role_id'])
+                combo, model, effort = a.effective_combo(role,state,project,[r for n in manifest['spec']['nodes'] for r in n['roles']])
+                if (combo,model,effort) != (cell['policy_combo'],cell['model'],cell['reasoning_effort']):
+                    raise ValueError('failed recovery cannot change effective role route')
+        plans.append((row['run'],plan))
+    manifest.setdefault('failed_snapshot_recoveries',[]).append(actual | dict(node=request['node'],run=request['run'],used=used,repairs=repairs,escalations=escalations,at=time.time()))
+    manifest['policy'], manifest['sources'] = current, sources
+    for run, plan in plans:
+        for wave in plan['waves']:
+            for cell in wave['calls']:
+                cell.update(local_policy_snapshot=after,routing_policy_version=current['routing'],workflow_policy_snapshot=current,workflow_source_revision=digest(sources))
+        db.execute('UPDATE runs SET plan=? WHERE id=?',(json.dumps(plan),run))
+        db.execute('INSERT INTO run_renewals(run,workflow,previous,current,expires,created) VALUES(?,?,?,?,?,?)',(run,manifest['id'],previous,json.dumps(manifest),time.time()+86400,time.time()))
+    db.execute('UPDATE workflows SET manifest=? WHERE id=?',(json.dumps(manifest),manifest['id']))
+
+
 def _recover_snapshot(db, manifest, project, state, expected, adoption=None):
     """Explicit CAS refresh for wholly unexecuted work; never replay or reclassify."""
     from crews import omp_adapter as a
@@ -386,7 +449,7 @@ def _recover_snapshot(db, manifest, project, state, expected, adoption=None):
             for cell in wave['calls']:
                 node = next(n for n in manifest['spec']['nodes'] if n['id'] == cell['node_id'])
                 role = next(r for r in node['roles'] if r['name'] == cell['role_id'])
-                combo, model, effort = a.effective_combo(role, state, project, node['roles'])
+                combo, model, effort = a.effective_combo(role, state, project, [r for n in manifest['spec']['nodes'] for r in n['roles']])
                 if (combo, model, effort) != (cell['policy_combo'], cell['model'], cell['reasoning_effort']):
                     raise ValueError('snapshot recovery cannot change effective role routing')
     if adoption is not None:
@@ -464,7 +527,8 @@ def dispatch(request, project, state=None):
             db.execute("UPDATE calls SET status='planned',result=NULL WHERE run=?",(entry['run'],))
             db.execute("UPDATE workflow_nodes SET state='planned' WHERE workflow=? AND node=?",(manifest['id'],node['id']))
         if op=='recover' and request.get('snapshot') is not None:
-            _recover_snapshot(db, manifest, project, state, request['snapshot'], request.get('adoption'))
+            if request.get('node') is not None:_recover_failed_snapshot(db, manifest, project, state, request)
+            else:_recover_snapshot(db, manifest, project, state, request['snapshot'], request.get('adoption'))
         elif op=='recover':
             from crews.outcomes import process_alive
             entry=db.execute('SELECT state,run,cells FROM workflow_nodes WHERE workflow=? AND node=?',(manifest['id'],request.get('node'))).fetchone()

@@ -343,16 +343,16 @@ def next_review(project,state=None):
     for job in waiting:
         with a.database(root(state)) as source:
             terminal=source.execute('SELECT status,result FROM calls WHERE run=? AND role=?',(job['run'],'approve-automation')).fetchone()
-        denied=bool(terminal and terminal[0]=='failed')
+        failure='recorded governance review failed: '+str((json.loads(terminal[1] or '{}').get('failure_kind') or terminal[0])) if terminal and terminal[0]=='failed' else None
         if terminal and terminal[0]=='completed' and json.loads(job['request'])['operation']=='govern':
             from crews import governance
             try:governance.decision(json.loads(terminal[1] or '{}').get('policy_decision'))
-            except (ValueError,TypeError,KeyError):denied=True
-        if denied and json.loads(job['request'])['operation']=='govern':
+            except (ValueError,TypeError,KeyError) as exc:failure=str(exc)
+        if failure and json.loads(job['request'])['operation']=='govern':
             with database(state) as db:
-                db.execute("UPDATE automation_jobs SET state='blocked',result='recorded governance denial' WHERE id=?",(job['id'],))
-                _pause(db,job,project,state,'recorded governance denial')
-            return {'blocked':'recorded governance denial'}
+                db.execute("UPDATE automation_jobs SET state='blocked',result=? WHERE id=?",(failure,job['id']))
+                _pause(db,job,project,state,failure)
+            return {'blocked':failure}
         try:
             rows=a.results(job['run'],project,job['session'],state)
         except ValueError as exc:

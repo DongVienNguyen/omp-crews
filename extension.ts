@@ -90,6 +90,11 @@ export function createCrewsExtension(options?:{hostBinding?:any;runtime?:any}){
    assertHostBinding(binding,child.call.host_binding);ledger=createHostLedger(binding);
    await pi.setActiveTools([...binding!.descriptor.tools.map((t:any)=>t.name),'yield']);
   }else if(binding){ctx.abort();throw Error('Trusted host child missing canonical binding');}
+  else if(!child.call.automation_governance){
+   const tools=['read','grep','glob','ast_grep','yield',...(child.call.commands.length?['bash']:[]),...(/^crew-(produce|integrate)-/.test(ctx.agent.name)?['write','edit']:[])];
+   const available=new Set(pi.getAllTools().map((tool:any)=>tool.name));
+   await pi.setActiveTools(tools.filter(name=>available.has(name)));
+  }
   if(child.call.host_binding){
    pi.on('session_shutdown',()=>binding?.onComplete?.({sessionId:ctx.sessionManager.getSessionId(),ledger:ledger?.status()}));
   }
@@ -159,9 +164,14 @@ export function createCrewsExtension(options?:{hostBinding?:any;runtime?:any}){
   checkConflict(ctx.cwd);if(isChild(ctx)||dispatches.size>=2)throw Error('Only main session with available native slot dispatches Crews');
   const active=bridge({op:'dispatch',run:ref.run,role:ref.role,session:ref.session,project:ctx.cwd});
   dispatches.set(active.token,active);
+  const lease=new AbortController();
+  const cancel=()=>lease.abort(signal?.reason);
+  if(signal?.aborted)cancel();else signal?.addEventListener('abort',cancel,{once:true});
+  const expiry=setTimeout(()=>lease.abort(new Error('Crew admission lease expired; explicit recovery required')),Math.max(0,active.expires*1000-Date.now()));
+  let nativeRow:any;
   try{
   routeEvidence(ctx,{path:'crew',run:ref.run,role:ref.role,requested_combo:active.call.requested_combo,effective_combo:active.call.policy_combo,bounded_small:active.call.bounded_small,model:active.call.model,effort:active.call.reasoning_effort,classification:active.call.role_answers,reason:active.call.routing_reason});
-   if(active.call.stage||active.call.workflow_stage)ctx.ui?.notify?.(`[ROUTE: ${active.call.policy_combo} | KEY: ${active.call.role_answers.need} | STAGE: ${active.call.stage??active.call.workflow_stage} | TASK: ${active.call.role_id}]`,'info');
+   try{ctx.ui?.notify?.(`[ROUTE: ${active.call.policy_combo} | KEY: ${active.call.role_answers.need} | STAGE: ${active.call.stage??active.call.workflow_stage??'direct'} | TASK: ${active.call.role_id}]`,'info');}catch{/* UI availability does not change admission or execution. */}
    const projectAgent=path.join(ctx.cwd,'.omp/agents',active.call.agent_type+'.md');
    const managedAgent=path.join(base,'agents',active.call.agent_type+'.md');
    for(const override of [projectAgent,path.join(settings.agentDir,'agents',active.call.agent_type+'.md')])if(fs.existsSync(override)&&fs.readFileSync(override,'utf8')!==fs.readFileSync(managedAgent,'utf8'))throw Error('Project/user shadows managed crew agent; review configuration');
@@ -172,9 +182,11 @@ export function createCrewsExtension(options?:{hostBinding?:any;runtime?:any}){
    if(active.call.context_request){outputSchema.properties.context_packet=bridge({op:'context_schema'});outputSchema.required.push('context_packet');}
    if(active.call.host_binding){assertHostBinding(binding,active.call.host_binding);outputSchema.properties.result=binding!.descriptor.result_schema;outputSchema.required.push('result');outputSchema.additionalProperties=false;}
    const task=active.call.prompt+(active.call.host_binding?'\nReturn full native yield envelope with required status, verification and result. result must match original schema: '+JSON.stringify(binding!.descriptor.result_schema):'');
-   const result=await dispatchContext.run(active,()=>ctx.invokeTool({context:`Independent role; use only its brief. [crew-ticket:${active.token}]`,tasks:[{agent:active.call.agent_type,task,solutionSpace:'Execute explicit role authority. Model/effort from admission.',outputSchema,schemaMode:'strict'}]},{signal,onUpdate:update}));
+   const result=await dispatchContext.run(active,()=>ctx.invokeTool({context:`Independent role; use only its brief. [crew-ticket:${active.token}]`,tasks:[{agent:active.call.agent_type,task,solutionSpace:'Execute explicit role authority. Model/effort from admission.',outputSchema,schemaMode:'strict'}]},{signal:lease.signal,onUpdate:update}));
    const rows=result.details?.results;
-   const row=rows?.[0];const proof=bridge({op:'receipt',token:active.token,project:ctx.cwd});
+   const row=rows?.[0];nativeRow=row;
+   if(lease.signal.aborted)throw lease.signal.reason;
+   const proof=bridge({op:'receipt',token:active.token,project:ctx.cwd});
    let payload=row?.structuredOutput?.data;
    if(!payload){try{payload=JSON.parse(row?.output||'');}catch{}}
    const hostVerification=active.call.checker_profile?bridge({op:'verify_profile',token:active.token,host_key:active.host_key,project:ctx.cwd}):null;
@@ -189,9 +201,9 @@ export function createCrewsExtension(options?:{hostBinding?:any;runtime?:any}){
    routeEvidence(ctx,{path:'crew-result',run:ref.run,role:ref.role,effective_combo:active.call.policy_combo,bounded_small:active.call.bounded_small,status:good?'COMPLETE':'FAILED',native:{model:row?.resolvedModel,effort:row?.resolvedThinkingLevel,exitCode:row?.exitCode,usage:row?.usage,durationMs},wire:proof});
    return result;
   }catch(err){
-   try{bridge({op:'record',run:ref.run,role:ref.role,session:ref.session,host_key:active.host_key,project:ctx.cwd,result:{status:'FAILED',failure_kind:signal?.aborted?'cancelled':'dispatch_error',verification:['Dispatch cancelled or failed; retry requires explicit repair']}});}catch{}
+   try{bridge({op:'record',run:ref.run,role:ref.role,session:ref.session,host_key:active.host_key,project:ctx.cwd,result:{status:'FAILED',failure_kind:lease.signal.aborted?'cancelled':'dispatch_error',verification:[err instanceof Error?err.message:String(err),'Dispatch failed; explicit recovery required'],native:nativeRow?{exitCode:nativeRow.exitCode,resolvedModel:nativeRow.resolvedModel,resolvedThinkingLevel:nativeRow.resolvedThinkingLevel,usage:nativeRow.usage}:null}});}catch{}
    throw err;
-  }finally{dispatches.delete(active.token);}
+  }finally{clearTimeout(expiry);signal?.removeEventListener('abort',cancel);dispatches.delete(active.token);}
  }
  function automationNotice(ctx:any,status:string,detail:any){
   const message='Crews automation '+status+': '+JSON.stringify(detail);
@@ -230,8 +242,10 @@ export function createCrewsExtension(options?:{hostBinding?:any;runtime?:any}){
   const value=bridge({op:'capability',project:ctx.cwd,request:p.request});
   return {content:[{type:'text',text:JSON.stringify(value)}],details:value};
  }});
- pi.registerTool({name:'task',label:'Task / Crews dispatch',description:'Native task, admitted crew reference, canonical intake, or automation:true to drain only operator-authorized frozen Large reviews.',parameters:z.object({automation:z.boolean().optional(),crew:z.object({run:z.string(),role:z.string(),session:z.string()}).optional(),intake:z.object({spec:z.any(),answers:z.any(),session:z.string()}).optional(),context:z.string().optional(),tasks:z.array(z.any()).optional(),agent:z.string().optional(),task:z.string().optional(),solutionSpace:z.string().optional()}).passthrough(),async execute(_id:any,p:any,signal:any,update:any,ctx:any){
+ pi.registerTool({name:'task',label:'Task / Crews dispatch',description:'Admitted crew reference, canonical intake, or automation:true to drain only operator-authorized frozen Large reviews.',parameters:z.object({automation:z.boolean().optional(),crew:z.object({run:z.string(),role:z.string(),session:z.string()}).strict().optional(),intake:z.object({spec:z.any(),answers:z.any(),session:z.string()}).strict().optional(),context:z.string().optional(),tasks:z.array(z.any()).optional(),agent:z.string().optional(),task:z.string().optional(),solutionSpace:z.string().optional()}).passthrough(),async execute(_id:any,p:any,signal:any,update:any,ctx:any){
   if(!ctx.invokeTool)throw Error('Native task delegation API unavailable; Crews disabled');
+  if(p.intake&&(Object.keys(p).some(key=>!['intake','solutionSpace'].includes(key))||Object.keys(p.intake).some(key=>!['spec','answers','session'].includes(key))))throw Error('Intake accepts only spec, answers and session; project is bound to session cwd');
+  if(p.crew&&(Object.keys(p).some(key=>key!=='crew')||Object.keys(p.crew).some(key=>!['run','role','session'].includes(key))))throw Error('Crew dispatch accepts only its admitted reference; project is bound to session cwd');
   if(p.automation){
    if(Object.keys(p).some(key=>key!=='automation'))throw Error('automation cannot combine with task selectors');
    if(isChild(ctx)||dispatches.size)throw Error('Only idle main host drains automation');
@@ -262,7 +276,7 @@ export function createCrewsExtension(options?:{hostBinding?:any;runtime?:any}){
    if(binding){if(spec.roles.length!==1)throw Error('Trusted host binding requires one canonical role');bridge({op:'attach_host_binding',run:plan.run_id,role:plan.waves[0].calls[0].role_id,session:plan.session,project:ctx.cwd,descriptor:binding.descriptor});}
    recovery.result(_id,false);
    routeEvidence(ctx,{path:'crew-intake',toolCallId:_id,run:plan.run_id,roles:spec.roles.map((r:any)=>({name:r.name,answers:r.answers}))});
-   return {content:[{type:'text',text:JSON.stringify({run:plan.run_id,session:plan.session,warnings:spec.roles.flatMap((r:any)=>r.classification_evidence?.warnings??[]),waves:plan.waves.map((w:any)=>({kind:w.kind,calls:w.calls.map((c:any)=>({role:c.role_id,model:c.model,effort:c.reasoning_effort,requested_combo:c.requested_combo,effective_combo:c.effective_combo,small_route:c.small_route,small_blockers:c.small_blockers,crew:{run:plan.run_id,role:c.role_id,session:plan.session}}))}))})}],details:{plan}};
+   return {content:[{type:'text',text:JSON.stringify({run:plan.run_id,project:plan.project,session:plan.session,warnings:spec.roles.flatMap((r:any)=>r.classification_evidence?.warnings??[]),waves:plan.waves.map((w:any)=>({kind:w.kind,calls:w.calls.map((c:any)=>({role:c.role_id,model:c.model,effort:c.reasoning_effort,requested_combo:c.requested_combo,effective_combo:c.effective_combo,small_route:c.small_route,small_blockers:c.small_blockers,crew:{run:plan.run_id,role:c.role_id,session:plan.session}}))}))})}],details:{plan}};
    }catch(error){recovery.result(_id,true);throw error;}
   }
   if(!p.crew)throw Error('Crews canonical intake or admitted crew reference required; ordinary delegation is disabled');

@@ -1,4 +1,4 @@
-"""Project-local recipe learning, separate from exact user-labelled learning.
+"""Project-local recipes; admission/tickets recheck lifecycle without reserving hits.
 
 Public request schema: register accepts ``recipe`` with strict ``features``
 (domain/language/operation/invariant/dependency_shape), version, cue, lesson,
@@ -7,6 +7,8 @@ evidence, negative_examples, applicability (feature predicates), exclusions
 max_difficulty and model_binding (authoritative model/policy SHA-256).
 Evidence/audit accept recipe_id, run, producer, checker and split. Outcomes,
 never caller scores or completion strings, supply proof. No commands run here.
+Evidence requires canonical immutable attempt provenance and matching producer family.
+Explicit escalation drops recipe reservation/guidance; trial/audit retries stay forbidden.
 
 match is read-only: approved_recipe is a proposal, not admission authority.
 Explicit lookup with confirmed=True reserves an active hit before use. This
@@ -262,6 +264,9 @@ def _proof(reference, project, state, recipe, profile_hash, audit=False):
     if recipe.get('frontier'):
         strategy=recipe['version_strategy']
         if proof.get('model_revision')!=strategy['identity'] or time.time()>=strategy['expires']:raise ValueError('frontier model revision unknown or expired')
+    source = _producer(proof, evidence_project, state)
+    if _hash(_features(source.get('recipe_features'))) != _hash(recipe['features']):
+        raise ValueError('evidence producer family binding mismatch')
     proof={**proof,'run':refs[0],'producer':refs[1],'checker':refs[2]}
     # Drift is returned to caller so suspension commits, not rolled back by error.
     mismatch = proof['profile_hash'] != profile_hash or proof['model_binding'] != recipe['model_binding']
@@ -671,8 +676,13 @@ def _capture(run,producer,checker,project,state=None):
         db.execute('BEGIN IMMEDIATE')
         rows=db.execute('SELECT * FROM recipe_v1_recipes WHERE project=? AND consent=1',(canonical(project),)).fetchall()
         _check_holdout(project,proof,root)
+        source=_producer(proof,project,root)
+        features=source.get('recipe_features')
+        if not features:return {'captured':0,'label_created':False}
+        family=_hash(_features(features))
         for row in rows:
             body=json.loads(row['body'])
+            if row['family']!=family or proof['learned'] and source.get('recipe_id')!=row['id']:continue
             if time.time()>=body.get('_expires_at',0):continue
             if proof['profile_hash']!=row['profile_hash'] or proof['model_binding']!=body['model_binding']:continue
             with db:
@@ -771,8 +781,44 @@ def match(role, project, roles=None, state=None):
         return {'match': False, 'effective_small': False, 'candidate': None, 'approved_recipe': None, 'reason': 'no_features'}
     return dispatch({'operation': 'lookup', 'role': role, 'roles': roles}, project, state)
 
+def _producer(proof,project,state):
+    reference = proof.get('reference')
+    if not isinstance(reference, dict) or reference.get('version') != 2 or any(
+        not isinstance(reference.get(key), dict) or not {'run', 'role', 'attempt'} <= set(reference[key])
+        for key in ('producer', 'checker')
+    ):
+        raise ValueError('recipe canonical attempt source required')
+    producer = reference['producer']
+    from crews.omp_adapter import home
+    with __import__('contextlib').closing(sqlite3.connect(Path(state or home())/'runs.sqlite')) as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='execution_attempts'").fetchone():
+            raise ValueError('recipe canonical attempt source missing')
+        row = db.execute('SELECT cell FROM execution_attempts WHERE id=? AND run=? AND role=? AND project=?',
+                         (producer['attempt'], producer['run'], producer['role'], canonical(project))).fetchone()
+        if not row:
+            raise ValueError('recipe canonical attempt source missing')
+        source=json.loads(row[0])
+        if not source.get('recipe_features') and source.get('trial_id'):
+            trial=db.execute('SELECT body FROM capability_trials WHERE id=?',(source['trial_id'],)).fetchone()
+            if not trial:raise ValueError('trial family provenance missing')
+            source['recipe_features']=json.loads(trial[0])['opportunity']['features']
+        return source
+
+
+def validate_delivery(cell,project,state):
+    """Revalidate reserved authority; no new hit, no OS-process interception."""
+    if not cell.get('recipe_id'):return
+    from crews.automation import database
+    with database(state) as db:
+        found=_lookup(db,canonical(project),{'role':cell.get('recipe_role'),'roles':cell.get('recipe_roles')},state)
+        approved=found.get('approved_recipe')
+        if cell.get('policy_combo')!='Small' or not approved or approved['recipe_id']!=cell['recipe_id'] or found['reason'] not in ('explicit_hit_reservation_required','fresh_behavioral_audit_required'):
+            raise ValueError('recipe authority inactive or stale: '+found['reason'])
+
+
 
 def admit_delivery(cell,run,project,state):
+    validate_delivery(cell,project,state)
     token=cell.get('audit_delivery_token')
     if not token:return
     from crews.automation import database
@@ -787,6 +833,9 @@ def admit_delivery(cell,run,project,state):
 
 
 def _complete_delivery(db,row,proof,project,state):
+    source=_producer(proof,project,state)
+    if _hash(_features(source.get('recipe_features')))!=row['family'] or proof['learned'] and source.get('recipe_id')!=row['id']:
+        raise ValueError('audit proof recipe/family binding mismatch')
     reference=proof.get('reference',{}).get('producer',{})
     delivery=db.execute("SELECT token FROM recipe_audit_deliveries WHERE recipe=? AND project=? AND run=? AND role=? AND state='admitted'",(row['id'],project,reference.get('run'),reference.get('role'))).fetchone()
     if not delivery:raise ValueError('audit proof lacks admitted delivery token')

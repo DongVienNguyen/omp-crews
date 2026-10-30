@@ -23,7 +23,7 @@ def main():
         items=opportunities.report(str(project),state)['opportunities']
         assert len(items)==1 and items[0]['kind']=='medium_baseline_evidence'
         strategy=dict(kind='operator_deployment',identity='fixture-revision',expires=time.time()+900,policy_binding=a.policy_binding(state))
-        review=dict(version=1,operation='review',opportunity_id=items[0]['id'],features=dict(domain='integer',language='python',operation='double',invariant='exact',dependency_shape='single'),version_strategy=strategy,confirmed=True)
+        review=dict(version=1,operation='review',opportunity_id=items[0]['id'],features=dict(domain='integer',language='python',operation='double',invariant=spec['invariants'][0],dependency_shape='single'),version_strategy=strategy,confirmed=True)
         opportunities.dispatch(signer.approve(review,str(project),state),str(project),state)
         snapshot=project/'trial';snapshot.mkdir()
         for name,content in starting.items():(snapshot/name).write_bytes(content)

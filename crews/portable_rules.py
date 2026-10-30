@@ -35,7 +35,8 @@ def revision(db,project,kind,target):
     from crews import recipes
     from crews.classification import policy_version
     from pathlib import Path
-    contract=dict(routing=policy_version(),workflow=outcomes.digest((Path(__file__).with_name('workflow.py')).read_text(encoding='utf-8')))
+    state=Path(db.execute('PRAGMA database_list').fetchone()[2]).parent
+    contract=dict(routing=policy_version(state),workflow=outcomes.digest((Path(__file__).with_name('workflow.py')).read_text(encoding='utf-8')))
     if kind=='policy':
         row=db.execute('SELECT request FROM automation_grants WHERE id=? AND project=? AND revoked=0',(target,project)).fetchone()
         if not row:raise ValueError('rule policy no longer exists')

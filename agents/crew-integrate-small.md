@@ -2,12 +2,12 @@
 name: crew-integrate-small
 description: Crews integrate using the admitted Small Combo model and effort
 blocking: true
+structured: true
 tools:
 - read
 - grep
 - glob
-- find
-- ls
+- ast_grep
 - yield
 - bash
 - write

@@ -45,7 +45,7 @@ export function admittedRead(cwd, input, name, scope) {
   };
   let values;
   if(name==='read')values=[input.path??input.file_path];
-  else if(name==='grep'||name==='glob')values=(input.path??'.').split(';');
+  else if(name==='grep'||name==='glob'||name==='ast_grep')values=(input.path??'.').split(';');
   else return false;
   return values.length>0&&values.every(value=>{
    if(typeof value!=='string')return false;

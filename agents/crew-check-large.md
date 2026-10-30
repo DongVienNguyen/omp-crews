@@ -2,12 +2,12 @@
 name: crew-check-large
 description: Crews check using the admitted Large Combo model and effort
 blocking: true
+structured: true
 tools:
 - read
 - grep
 - glob
-- find
-- ls
+- ast_grep
 - yield
 - bash
 spawns: []

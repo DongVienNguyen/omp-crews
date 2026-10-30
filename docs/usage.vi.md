@@ -23,6 +23,12 @@ Có ba lớp riêng biệt:
 
 Đây là tái sử dụng kinh nghiệm có kiểm chứng, **không huấn luyện lại trọng số model**. Model nói `COMPLETE` không tự trở thành bằng chứng code đúng.
 
+### Tự động cho project hiện có và tương lai
+
+Mặc định cài đặt lấy từ [governance.DEFAULTS](../crews/governance.py); [automation.ensure](../crews/automation.py) tạo policy riêng khi mở project mới. Large tự duyệt policy, gia hạn, candidate, promotion và audit qua host khi OMP đang hoạt động. Không có daemon lúc OMP đóng. Đây là tự động trong quyền đã cấp, không phải tự chấp thuận mọi đề xuất.
+
+Policy đã duyệt ở project cũ không tự bị ghi đè bởi mặc định. Muốn chuyển sang tự động đầy đủ, dùng `automation export --project PATH --json`, sửa riêng `proposal`, rồi `automation import --project PATH --request packet.json --yes`; host xếp Large review và chỉ áp dụng sau receipt hợp lệ. `mode:on`, `auto_evidence:true` và `auto_promotion` có ngưỡng bật đường tự động; không biến evidence thiếu thành đạt. Giữ routing rỗng để dùng baseline theo capability, không tạo floor Medium chỉ vì implementation có baseline Medium. Combo/effort dùng chung trong cùng profile; lease, quota, evidence và quyền file/command vẫn tách theo project. Deny hoặc lỗi pause không tự replay; explicit enable không phải approval.
+
 ## 2. Chuẩn bị trước khi cài
 
 Cần có:
@@ -192,6 +198,8 @@ Thay các ID ví dụ bằng model thực sự có trong OMP. Không đưa API k
 
 Global chỉ thống nhất đường admission; không ép tỷ lệ Small. Đọc `crew_results` hoặc `/crew report` để phân biệt main chat, governance Large, role đã lập plan và role thực sự có native/wire receipt. `planned` không phải đã chạy; intake chỉ trả plan, orchestrator phải dispatch đúng `task {crew:{run,role,session}}` được trả về. Không replay plan cũ chỉ để tăng số lượt Small.
 
+Mọi dispatch direct hoặc staged đều hiện thông báo `ROUTE` với Combo đã admit; thông báo không thay thế native/wire receipt. Nếu thiếu thông báo ở session cũ, restart OMP để nạp extension mới, rồi xem `/crew report` và kết quả role thay vì suy luận từ main model.
+
 Khai báo `everyday_implementation` difficulty2 hoặc semantic review difficulty2.5 thường vẫn chọn Medium/Large. Chia việc đọc facts và kiểm tra cơ học thành role riêng khi thực sự độc lập; không đổi tên một semantic verdict thành retrieval để hạ Combo. Bounded/routine implementation chỉ xuống Small khi có đầy đủ safety facts, scope và checker độc lập; xem [điều kiện routing](../README.md#bounded-implementation-on-small-050).
 
 `requested_combo` là baseline, `effective_combo` là lựa chọn hiện tại, `small_route` mô tả bounded/routine, `small_blockers` giải thích guard thiếu. Chỉ native/wire receipt chứng minh model/effort đã thực thi. `policy.json` quản lý Combo, còn routing/lease thuộc policy từng project. `baseline` không ép mức tối thiểu; `floor` có và renewal không được tự hạ nếu thiếu proposal migration đúng key đã được người dùng xác nhận và Large duyệt.
@@ -207,6 +215,12 @@ Agent đọc `crew_catalog` rồi gửi intake có đủ scope/acceptance. Ví d
 ```
 
 Chỉ dùng ví dụ khi `settings.json` thực sự tồn tại và được phép đọc. Intake trả `waves` cùng crew reference; agent gọi `task` bằng đúng reference đó. Không copy run ID từ tài liệu, không tự chọn model và không coi intake là đã thực thi. Sau dispatch kiểm `crew_results`: status, native/wire model/effort, host authentication và verification; hành vi chưa có executable checker vẫn có thể là unknown dù native hoàn tất.
+
+Intake trả trường `project` là gốc đã bind. Scope `src` trong session đang ở thư mục tạm chỉ cho đọc `src` dưới thư mục tạm; viết tên project khác trong mission không đổi cwd hay quyền. Mở session bằng `omp --cwd <project-đích>` hoặc tạo embedded host với cwd đúng, rồi lập plan mới. Brief child cũng ghi `admitted_project`; nếu sai gốc, trả BLOCKED ngay, không thử traversal/absolute path để vượt guard.
+
+Dispatch chỉ nhận `crew:{run,role,session}`; không trộn `tasks`, `agent`, `project` hoặc model override. Intake chỉ nhận `intake:{spec,answers,session}` và tùy chọn top-level `solutionSpace`. Trường dư ở cả lớp ngoài và reference/intake lồng bị từ chối trước admission để tránh tiêu thụ ticket trong khi caller tưởng đã đổi project hay model.
+
+Child thông thường chỉ quảng bá tool đã có trong host và được guard hỗ trợ: đọc/search theo scope, yield; bash chỉ khi có command đã admit, write/edit chỉ với writer. `find`/`ls` không được quảng bá như một quyền giả. `ast_grep` dùng cùng scope/symlink guard với grep, và chỉ xuất hiện khi OMP đã bật `astGrep.enabled`; plugin không tự bật setting này. Nếu UI notify không khả dụng, dispatch vẫn tiếp tục và receipt là nguồn kiểm chứng.
 
 ## 8. Evidence, recipe và kiểm tra độc lập
 

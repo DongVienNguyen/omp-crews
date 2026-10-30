@@ -78,14 +78,14 @@ RUBRIC = {
 }
 
 
-def policy_version():
+def policy_version(state=None):
     # Hash policy-owning code too: remaps and difficulty boundaries are not all catalog data.
     from pathlib import Path
     root = Path(__file__).resolve().parent
     sources = ['classification.py', 'omp_adapter.py', 'planner.py', 'budget.py', 'learning.py', 'outcomes.py', 'recipes.py', 'shaping.py', 'approval.py', 'accounting.py', 'evaluation.py', 'runner.py', 'automation.py', 'governance.py', 'portable_rules.py', 'workflow.py', 'context_packets.py', 'attempt_ledger.py', 'workflow_evaluation.py']
     sources += ['capability_trials.py', 'opportunities.py', 'sdlc_api.py']
     from crews.omp_adapter import model_policy
-    payload = {'catalog': catalog.load(), 'rubric': RUBRIC, 'model_policy':model_policy(),
+    payload = {'catalog': catalog.load(), 'rubric': RUBRIC, 'model_policy':model_policy(state),
                'sources': {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sources}}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
@@ -158,7 +158,7 @@ def refuse(errors):
         raise ValueError('; '.join('.'.join(map(str, loc)) + ': ' + message for loc, message in errors))
 
 
-def classify_role(role, project=None, roles=None):
+def classify_role(role, project=None, roles=None, state=None):
     if role.get('kind') not in catalog.load()['kinds']:
         raise ValueError('kind: valid role kind required')
     if not isinstance(role.get('mission'), str) or not role['mission'].strip(): raise ValueError('mission: nonempty objective required')
@@ -184,11 +184,11 @@ def classify_role(role, project=None, roles=None):
             if answers.get(key) is None: answers[key]=value
     from crews.omp_adapter import model_policy
     from crews.omp_adapter import policy as active_policy
-    policy=model_policy();combo_model=policy['combos'];classifier_model=active_policy()['classifier_model'];complete=answers.get('need') is not None and answers.get('difficulty') is not None
-    if not complete:return {'answers':None,'reason':reason,'outcome':'requires_classification','tier':None,'policy_version':policy_version(),'classifier_model':classifier_model,'model_policy':combo_model}
-    effective={**role,'answers':answers};refuse(answer_errors(effective)+safety_errors(effective));from crews.omp_adapter import preview_seat;seat=preview_seat(effective,project,roles);tier={'Small':'small','Medium':'medium','Large':'large'}[seat['policy_combo']]
+    policy=model_policy(state);combo_model=policy['combos'];classifier_model=active_policy(state)['classifier_model'];complete=answers.get('need') is not None and answers.get('difficulty') is not None
+    if not complete:return {'answers':None,'reason':reason,'outcome':'requires_classification','tier':None,'policy_version':policy_version(state),'classifier_model':classifier_model,'model_policy':combo_model}
+    effective={**role,'answers':answers};refuse(answer_errors(effective)+safety_errors(effective));from crews.omp_adapter import preview_seat;seat=preview_seat(effective,project,roles,state);tier={'Small':'small','Medium':'medium','Large':'large'}[seat['policy_combo']]
     warnings=[]
     if declared and answers['need'] in ('everyday_implementation','difficult_review','integration_architecture') and all(facts[key] is False for key in ('behavior_undecided','unknown_cause','consequential_judgment')):
         if role['kind']=='research' and facts['information_only'] is True and facts['targets_fixed'] is True:warnings.append('review_declared_need: facts describe bounded information retrieval')
         if role['kind']=='check' and facts['method_fixed'] is True and facts['targets_fixed'] is True and facts['criterion_fixed'] is True:warnings.append('review_declared_need: facts describe deterministic verification')
-    return {'answers':answers,'reason':reason,'warnings':warnings,'outcome':'declared' if declared else 'deterministic','tier':tier,**seat,'policy_version':policy_version(),'classifier_model':classifier_model,'model_policy':combo_model}
+    return {'answers':answers,'reason':reason,'warnings':warnings,'outcome':'declared' if declared else 'deterministic','tier':tier,**seat,'policy_version':policy_version(state),'classifier_model':classifier_model,'model_policy':combo_model}

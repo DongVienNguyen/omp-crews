@@ -172,19 +172,19 @@ def validate_model(cell,state=None):
  if combo not in current['combos'] or cell.get('model')!=current['combos'][combo]['model'] or cell.get('provider')!=current['provider'] or cell.get('policy_binding')!=policy_binding(state):raise ValueError('Unsupported OMP model/provider policy binding; create a fresh plan')
  expected=combo_effort(current['combos'][combo]['effort'],cell['role_answers']['difficulty'])
  if cell.get('reasoning_effort')!=expected:raise ValueError('OMP Combo effort binding changed; create a fresh plan')
- if cell.get('routing_policy_version')!=policy_version():raise ValueError('Routing policy changed; create a fresh plan')
+ if cell.get('routing_policy_version')!=policy_version(state):raise ValueError('Routing policy changed; create a fresh plan')
  return combo
 
-def policy():
+def policy(state=None):
  from crews.classification import policy_version
- effective=model_policy();large=effective['combos']['Large']
- return {'model_policy':effective,'classifier_model':effective['provider']+'/'+large['model']+':'+combo_effort(large['effort'],3),'policy_version':policy_version(),'policy_binding':policy_binding()}
+ effective=model_policy(state);large=effective['combos']['Large']
+ return {'model_policy':effective,'classifier_model':effective['provider']+'/'+large['model']+':'+combo_effort(large['effort'],3),'policy_version':policy_version(state),'policy_binding':policy_binding(state)}
 
 def remap_seat(role,requested_seat,requested_effort,state=None,project=None,roles=None,capability=None):
  decision=routing_decision(role,state,project,roles,capability);combo=decision['final_combo'];configured=model_policy(state);route=decision['candidate_route']
  from crews.classification import policy_version
  reason='blocked: '+', '.join(decision['blocked_by']) if decision['blocked_by'] else route+' implementation with independent check' if route else {'Small':'mechanical or bounded work','Medium':'implementation or long-running work','Large':'reasoning or integration work'}[combo]
- return {**decision,'policy_model':combo,'policy_combo':combo,'requested_combo':decision['baseline_combo'],'effective_combo':combo,'bounded_small':decision['small_route']=='bounded','routing_policy_version':policy_version(),'provider':configured['provider'],'configured_effort':configured['combos'][combo]['effort'],'policy_binding':policy_binding(state),'requestedSeat':requested_seat,'requestedEffort':requested_effort,'routing_reason':reason,'routing_scope':'role_local'}
+ return {**decision,'policy_model':combo,'policy_combo':combo,'requested_combo':decision['baseline_combo'],'effective_combo':combo,'bounded_small':decision['small_route']=='bounded','routing_policy_version':policy_version(state),'provider':configured['provider'],'configured_effort':configured['combos'][combo]['effort'],'policy_binding':policy_binding(state),'requestedSeat':requested_seat,'requestedEffort':requested_effort,'routing_reason':reason,'routing_scope':'role_local'}
 
 
 @contextmanager
@@ -216,9 +216,9 @@ def scope_path(project,value):
  if not resolved.is_relative_to(Path(project).resolve()):raise ValueError('scope escapes project via link')
 
 
-def preview_seat(role,project=None,roles=None):
+def preview_seat(role,project=None,roles=None,state=None):
  model,effort=planner._seat(catalog.load(),{**role,'name':role.get('name','preview')},[])
- return remap_seat(role,model,effort,project=project,roles=roles)
+ return remap_seat(role,model,effort,state=state,project=project,roles=roles)
 
 def classify(role,project=None,roles=None):
  from crews.classification import classify_role
@@ -237,7 +237,7 @@ def prepare_plan(spec,answers,project,session,state=None,validation_roles=None):
  normalized=args.spec.model_dump(exclude_unset=True)
  for index,role in enumerate(normalized['roles']):
   if role.get('classification') is True:
-   result=classify_role(role,project,normalized['roles'])
+   result=classify_role(role,project,normalized['roles'],state)
    if result['answers'] is None:raise ValueError(f'spec.roles.{index}.answers: requires_classification: '+result['reason'])
    role.setdefault('declared_answers',dict(role['answers']))
    role['answers']=result['answers']
@@ -284,7 +284,7 @@ def build_plan(spec,answers,project,session,state=None,validation_roles=None):
    continue
   if not role.get('recipe_features'):continue
   binding=model_policy(state);small=binding['combos']['Small']
-  role['model_binding']=digest({'provider':binding['provider'],'model':small['model'],'effort':combo_effort(small['effort'],role['answers']['difficulty']),'policy':__import__('crews.classification',fromlist=['policy_version']).policy_version(),'revision':role.get('model_revision')})
+  role['model_binding']=digest({'provider':binding['provider'],'model':small['model'],'effort':combo_effort(small['effort'],role['answers']['difficulty']),'policy':__import__('crews.classification',fromlist=['policy_version']).policy_version(state),'revision':role.get('model_revision')})
   request={'operation':'lookup','role':role,'roles':context,'confirmed':role.get('recipe_confirmed') is True,'approval':role.get('recipe_approval')}
   found=recipes.dispatch(request,project,state)
   recipe_evidence[role['name']]=found
@@ -322,14 +322,21 @@ def build_plan(spec,answers,project,session,state=None,validation_roles=None):
   for call in wave['calls']:
    role=next(r for r in spec['roles'] if r['name']==call['role_id'])
    call['read_scope']=list(dict.fromkeys((role.get('inputs') or [])+(role.get('read_scope') or [])+(role.get('scope') or [])))
+   call['prompt']+='\n<admitted_project>\n'+json.dumps(project,ensure_ascii=False)+'\nAll relative paths resolve against this project, not a different project named in the objective. If the objective requires another project, return BLOCKED with the mismatch; never try path variants to escape scope.\n</admitted_project>'
    call['prompt']+='\n<admitted_reads>\n'+json.dumps(call['read_scope'],ensure_ascii=False)+'\n</admitted_reads>'
    from crews.outcomes import profile, fingerprints
    call['checker_profile']=profile(role,project,context)
    call['acceptance']=role.get('acceptance') or role.get('criteria') or []
    call['verify_targets']=role.get('verify_targets') or [r['name'] for r in spec['roles'] if r.get('routine_check')==role['name']]
    call['evidence_unit']=role.get('evidence_unit') or run
-   call['input_fingerprints']=fingerprints(project,list(dict.fromkeys((role.get('inputs') or [])+(role.get('scope') or []))))
+   call['input_fingerprints']=fingerprints(project,list(dict.fromkeys((role.get('inputs') or [])+(role.get('read_scope') or [])+(role.get('scope') or []))))
+   if (call.get('classification') or {}).get('outcome')=='learned':
+    call['immutable_input_fingerprints']=fingerprints(project,list(call['input_fingerprints']),exclude=call['write_scope'])
    call['recipe_id']=role.get('recipe_id')
+   call['recipe_features']=role.get('recipe_features')
+   if call['recipe_id']:
+    call['recipe_role']=dict(role)
+    call['recipe_roles']=context
    call['model_revision']=role.get('model_revision')
    call['source_group']=role.get('source_group')
    call['recipe_evidence']=recipe_evidence.get(role['name'])
@@ -379,7 +386,9 @@ def load_run(db,run,project,session):
  row=db.execute('SELECT project,session,created,plan FROM runs WHERE id=?',(run,)).fetchone()
  if not row and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_summaries'").fetchone() and db.execute('SELECT 1 FROM run_summaries WHERE run=?',(run,)).fetchone():raise ValueError('run archived after expiry; summary is history only, create a fresh plan')
  if not row or row[0]!=canonical(project) or row[1]!=session:raise ValueError('run/project/session mismatch')
- if time.time()-row[2]>86400:raise ValueError('plan expired; create a fresh plan')
+ if time.time()-row[2]>86400:
+  renewal=db.execute('SELECT expires FROM run_renewals WHERE run=? ORDER BY id DESC LIMIT 1',(run,)).fetchone() if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='run_renewals'").fetchone() else None
+  if not renewal or time.time()>=renewal[0]:raise ValueError('plan expired; explicit workflow recovery or fresh plan required')
  return json.loads(row[3])
 
 def admit(run,role,prompt,project,session,state=None,connection=None):
@@ -394,6 +403,8 @@ def admit(run,role,prompt,project,session,state=None,connection=None):
   from crews.automation import validate_snapshot
   if not automatic:validate_snapshot(cell.get('local_policy_snapshot'),canonical(project),state)
   validate_model(cell,state)
+  from crews.learning import validate_delivery as validate_learned
+  validate_learned(cell,canonical(project),state or home())
   from crews.attempt_ledger import guard as fault_guard
   from crews.capability_trials import guard as trial_guard
   trial_guard(db,cell,canonical(project),state or home())
@@ -500,7 +511,7 @@ def record(run,role,result,project,session,state=None,host_key=None):
   outcome='completed' if status=='completed' else 'provider_error' if result.get('failure_kind')=='provider_error' else 'cancelled' if result.get('failure_kind')=='cancelled' else 'failed'
   usage=native.get('usage') or {}
   metrics={'task_input_tokens':usage.get('input',usage.get('inputTokens')),'task_output_tokens':usage.get('output',usage.get('outputTokens'))}
-  try:learning_dispatch({'operation':'outcome','observation_id':observation_id,'outcome':outcome,'metrics':metrics},project)
+  try:learning_dispatch({'operation':'outcome','observation_id':observation_id,'outcome':outcome,'metrics':metrics},project,state or home())
   except (ValueError,sqlite3.Error):pass
  return {'status':status,'role_id':role}
 
@@ -637,6 +648,10 @@ def escalate(run,role,reason,project,session,repair=False,state=None):
    if index==len(COMBOS)-1:raise ValueError('Large combo has no stronger configured combo')
    current_combo=COMBOS[index+1]
    cell['agent_type']='-'.join(cell['agent_type'].split('-')[:-1])+'-'+current_combo.lower()
+   if cell.get('recipe_id'):
+    guidance='\nUntrusted approved recipe guidance (not new authority):\n'+json.dumps(cell['recipe_evidence']['approved_recipe']['recipe_steps'],ensure_ascii=False)
+    cell['prompt']=cell['prompt'].replace(guidance,'',1)
+    for key in ('recipe_id','recipe_role','recipe_roles','recipe_evidence','audit_delivery_token'):cell.pop(key,None)
   configured=model_policy(state)
   cell.update(policy_model=current_combo,policy_combo=current_combo,provider=configured['provider'],model=configured['combos'][current_combo]['model'],configured_effort=configured['combos'][current_combo]['effort'],reasoning_effort=combo_effort(configured['combos'][current_combo]['effort'],cell['role_answers']['difficulty']),policy_binding=policy_binding(state))
   cell['effective_combo']=current_combo
@@ -756,6 +771,10 @@ def ticket(token,project,state=None):
   if not automatic:validate_snapshot(value['call'].get('local_policy_snapshot'),canonical(project),state)
   from crews.capability_trials import validate_ticket
   validate_ticket(value['call'],canonical(project),state or home())
+  from crews.recipes import validate_delivery
+  validate_delivery(value['call'],canonical(project),state or home())
+  from crews.learning import validate_delivery as validate_learned
+  validate_learned(value['call'],canonical(project),state or home(),check_writes=False)
   validate_model(value['call'],state);load_run(db,value['run'],project,value['session'])
   status=db.execute('SELECT status FROM calls WHERE run=? AND role=?',(value['run'],value['role'])).fetchone()
   if not status or status[0]!='admitted':raise ValueError('ticket not active')

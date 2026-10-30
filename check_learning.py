@@ -1,4 +1,4 @@
-"""Local assert checks; no provider, model, credentials or existing state needed."""
+"""Local privacy, immutable provenance and safety checks; isolated from existing state."""
 import copy
 from contextlib import closing
 import hashlib
@@ -35,7 +35,7 @@ def run(home):
     project = str(home / 'secret-project-path-573981')
     role = {
         'name': 'private-role-name-573981', 'kind': 'check', 'mission': 'check private-objective-573981',
-        'solution_space': 'private-method-573981', 'scope': ['private-source-path-573981'],
+        'solution_space': 'private-method-573981', 'scope': [], 'read_scope': ['private-source-path-573981'],
         'commands': ['private-command-573981'], 'authority': ['private-authority-573981'],
         'criteria': ['private-criterion-573981'], 'deliverable': 'private-deliverable-573981',
         'facts': {'method_fixed': True, 'targets_fixed': True, 'criterion_fixed': True,
@@ -89,7 +89,7 @@ def run(home):
     spaced = {**renamed, 'mission': '  check   private-objective-573981  '}
     assert obs(renamed)['signature'] == initial['signature']
     assert obs(spaced)['signature'] != initial['signature']
-    for field, value in [('mission', 'new task'), ('solution_space', 'new method'), ('scope', ['new scope']),
+    for field, value in [('mission', 'new task'), ('solution_space', 'new method'), ('read_scope', ['new scope']),
                          ('commands', ['new command']), ('authority', ['new authority']), ('criteria', ['new criterion'])]:
         assert obs({**role, field: value})['signature'] != initial['signature']
     assert obs(context_fingerprint='changed artifact content hash')['signature'] != initial['signature']
@@ -141,8 +141,23 @@ def run(home):
     facts_change['facts']['method_fixed'] = False
     assert not lookup(facts_change)['match']
     assert not lookup({**role, 'commands': ['different exact method']})['match']
-    call('observe', role=role, context_fingerprint=context, policy_version=policy, proposal=proposal,
-         metrics={'source': 'learned', 'teacher_avoided': True, 'latency_ms': 1, 'input_tokens': None})
+    learned = call('observe', role=role, context_fingerprint=context, policy_version=policy, proposal=proposal,
+                   metrics={'source': 'learned', 'teacher_avoided': True, 'latency_ms': 1, 'input_tokens': None})
+    learned_id = learned['observation_id']
+    for field, value in (('source', 'teacher'), ('cache_hit', True), ('teacher_avoided', False),
+                         ('teacher_requested', True), ('shadow_sampled', True), ('latency_ms', 9),
+                         ('input_tokens', 9), ('output_tokens', 9), ('reasoning_tokens', 9),
+                         ('outcome', 'failed')):
+        rejects(lambda field=field, value=value: call('outcome', observation_id=learned_id,
+                outcome='completed', metrics={field: value}))
+    assert call('outcome', observation_id=learned_id, outcome='completed',
+                metrics={'task_latency_ms': 7, 'task_input_tokens': 8, 'task_output_tokens': 9})['outcome'] == 'completed'
+    rejects(lambda: label(learned_id, 'learned-source-overwrite'))
+    with closing(sqlite3.connect(home / 'learning.sqlite')) as db:
+        learned_metrics = json.loads(db.execute('SELECT metrics FROM observations WHERE id=?', (learned_id,)).fetchone()[0])
+    assert learned_metrics == {'source': 'learned', 'teacher_avoided': True, 'latency_ms': 1,
+                               'input_tokens': None, 'outcome': 'completed', 'task_latency_ms': 7,
+                               'task_input_tokens': 8, 'task_output_tokens': 9}
     before = call('status')
     assert before['teacher_calls_avoided'] == 1
     assert before['resource_coverage']['reasoning_tokens']['unknown'] == before['observations']
@@ -197,6 +212,46 @@ def run(home):
     rejects(lambda: obs({**role, 'answers': {'divisible': float('inf')}}))
     for facts in ([], False, 0, ''):
         rejects(lambda facts=facts: obs({**role, 'facts': facts}))
+
+    # Risk survives storage: neither observation nor later human label can cheapen it.
+    risk_role = {**role, 'risk': {'security': True, 'authorization': False}}
+    rejects(lambda: obs(risk_role))
+    risk_oid = obs(risk_role, proposal=None)['observation_id']
+    rejects(lambda: label(risk_oid, 'critical-cheap'))
+    rejects(lambda: obs({**risk_role, 'answers': {**role['answers'], **proposal}}, proposal=None))
+    assert label(risk_oid, 'critical-review', need='difficult_review', difficulty=2.5)['accepted']
+    with closing(sqlite3.connect(home / 'learning.sqlite')) as db:
+        risk_safe = json.loads(db.execute('SELECT safe_role FROM observations WHERE id=?', (risk_oid,)).fetchone()[0])
+    assert risk_safe['risk']['security'] is True and risk_safe['risk']['authorization'] is False
+    rejects(lambda: l._proposal(risk_safe, proposal, learning_safe=False))
+    rejects(lambda: obs({**role, 'risk': {'security': 'credential-secret'}}, proposal=None))
+    rejects(lambda: obs({**role, 'host_tools': ['private-command-573981']}, proposal=None))
+    for kind in ('check', 'research'):
+        rejects(lambda kind=kind: obs({**role, 'kind': kind, 'scope': ['private-write-path-573981']}, proposal=None))
+
+    # Specialist eligibility persists as presence, not private prose or attempt IDs.
+    specialist = {'need': 'specialist', 'difficulty': 2}
+    for field, value in (('capability_reason', 'private-capability-reason-573981'),
+                         ('prior_attempt', {'run': 'private-prior-run-573981', 'role': 'private-prior-role-573981'})):
+        specialist_role = {**role, field: value}
+        specialist_oid = obs(specialist_role, proposal=specialist)['observation_id']
+        assert label(specialist_oid, 'specialist-' + field, **specialist)['accepted']
+        with closing(sqlite3.connect(home / 'learning.sqlite')) as db:
+            specialist_safe = json.loads(db.execute('SELECT safe_role FROM observations WHERE id=?', (specialist_oid,)).fetchone()[0])
+        assert specialist_safe[field + '_present'] is True and field not in specialist_safe
+        assert l._proposal(specialist_safe, specialist) == specialist
+        if field == 'capability_reason':
+            rejects(lambda: l._proposal(specialist_safe, {'need': 'specialist', 'difficulty': 1}))
+    rejects(lambda: obs(role, proposal=specialist))
+    rejects(lambda: obs({**role, 'capability_reason_present': True, 'prior_attempt_present': True}, proposal=specialist))
+    rejects(lambda: obs({**role, 'capability_reason': '  '}, proposal=None))
+    rejects(lambda: obs({**role, 'prior_attempt': {'run': 'private-prior-run-573981'}}, proposal=None))
+    write_oid = obs({**role, 'kind': 'produce', 'scope': ['private-write-path-573981']}, proposal=None)['observation_id']
+    with closing(sqlite3.connect(home / 'learning.sqlite')) as db:
+        write_safe = json.loads(db.execute('SELECT safe_role FROM observations WHERE id=?', (write_oid,)).fetchone()[0])
+    assert write_safe['scope_write_present'] is True and 'scope' not in write_safe
+    for kind in ('check', 'research'):
+        rejects(lambda kind=kind: l._proposal({**write_safe, 'kind': kind}, {'need': 'difficult_review', 'difficulty': 3}))
     literal_a = obs({**role, 'commands': ['echo "a  b"']})
     literal_b = obs({**role, 'commands': ['echo "a b"']})
     assert literal_a['signature'] != literal_b['signature']
@@ -211,7 +266,8 @@ def run(home):
     raw = (home / 'learning.sqlite').read_bytes()
     for secret in ('private-role-name', 'private-objective', 'private-source-path', 'private-command',
                    'private-authority', 'private-criterion', 'private-evidence', 'private-context',
-                   'private-policy', 'secret-project-path', 'private-method', 'credential-secret'):
+                   'private-policy', 'secret-project-path', 'private-method', 'credential-secret',
+                   'private-capability-reason', 'private-prior-run', 'private-prior-role', 'private-write-path'):
         assert secret.encode() not in raw, secret
     with closing(sqlite3.connect(home / 'learning.sqlite')) as db:
         assert db.execute("SELECT count(*) FROM labels WHERE source!='user'").fetchone()[0] == 0
@@ -260,7 +316,7 @@ def feedback_checks(home, role, proposal, policy, context):
                 'write_scope': [], 'read_scope': ['artifact.txt'], 'facts': copy.deepcopy(original.get('facts', {})),
                 'classification': {'learning': {'observation_id': observed['observation_id']}}}
         plan = {'waves': [{'kind': role['kind'], 'calls': [cell]}]}
-        result = {'status': 'COMPLETE', 'verification': ['assert artifact verified independently'],
+        result = {'status': 'COMPLETE', 'host_authenticated': True, 'verification': ['assert artifact verified independently'],
                   'native': {'exitCode': 0, 'resolvedModel': cell['provider'] + '/' + cell['model'] + ':' + cell['reasoning_effort'],
                              'resolvedThinkingLevel': cell['reasoning_effort']},
                   'wire': {'model': cell['model'], 'effort': cell['reasoning_effort'], 'provider': cell['provider'], 'role': 'check'},
@@ -300,6 +356,7 @@ def feedback_checks(home, role, proposal, policy, context):
     assert not feedback()['accepted']
 
     for name, mutate in (
+        ('unauthenticated', lambda c, r: r.update(host_authenticated=False)),
         ('exit', lambda c, r: r['native'].update(exitCode=1)),
         ('bool_exit', lambda c, r: r['native'].update(exitCode=False)),
         ('wire', lambda c, r: r['wire'].update(effort='HIGH')),
@@ -342,6 +399,81 @@ def feedback_checks(home, role, proposal, policy, context):
     assert report['pending_outcomes'] > 0 and report['resource_coverage']['task_latency_ms']['unknown'] > 0
 
 
+def integration_boundaries():
+    from crews import omp_adapter as adapter
+    with tempfile.TemporaryDirectory(prefix='learning-boundaries-') as folder:
+        root = Path(folder); state = root / 'explicit'; project = root / 'project'; project.mkdir()
+        previous = os.environ.get('CREWS_OMP_HOME'); os.environ['CREWS_OMP_HOME'] = str(root / 'ambient')
+        role = {'kind':'research','mission':'Read fixed source','scope':[],'answers':{'divisible':0,'specific':1},'facts':{'unknown_cause':False,'consequential_judgment':False,'behavior_undecided':False}}
+        proposal = {'need':'bounded_retrieval','difficulty':1}
+        try:
+            def call(operation, **fields):return l.dispatch({'operation':operation,**fields},str(project),state)
+            rule = None
+            for index in range(5):
+                obs = call('observe',role=role,context_fingerprint='context',policy_version='version',proposal=proposal,metrics={'source':'teacher'})
+                labelled = call('label',observation_id=obs['observation_id'],unit_id=str(index),split='train' if index<3 else 'holdout',evidence='independent',**proposal)
+                rule = labelled['rule_id']
+            call('activate',rule_id=rule);call('configure',mode='on')
+            cell = {'classification':{'outcome':'learned','learning':{'rule_id':rule}},'role_answers':proposal,'input_fingerprints':{}}
+            l.validate_delivery(cell,str(project),state)
+            from check_effort_policy import task_answers
+            (project/'source.txt').write_text('original')
+            execution_role={**role,'name':'read-source','deliverable':'facts.json','inputs':['source.txt'],'read_scope':['source.txt'],'commands':[],'acceptance':['Read original source'],'answers':{**role['answers'],**proposal},'classification_evidence':cell['classification']}
+            pending=adapter.build_plan({'task':'Read original source','roles':[execution_role]},task_answers('bounded_retrieval',1),str(project),'pending',state)
+            ambient=root/'ambient';ambient.mkdir();(ambient/'policy.json').write_text('{"provider":"ambient","combos":{"Small":{"model":"different-small","effort":"High"},"Medium":{"model":"different-medium","effort":"High"},"Large":{"model":"different-large","effort":"High"}}}')
+            adapter.validate_model(pending['waves'][0]['calls'][0],state)
+            from crews.classification import classify_role
+            assert classify_role(execution_role,str(project),[execution_role],state)['provider']!='ambient'
+            (ambient/'policy.json').unlink()
+            active=adapter.build_plan({'task':'Read original source','roles':[execution_role]},task_answers('bounded_retrieval',1),str(project),'active',state)
+            admitted=adapter.dispatch(active['run_id'],'read-source',str(project),'active',state)
+            adapter.ticket(admitted['token'],str(project),state)
+            (project/'source.txt').write_text('changed after planning')
+            rejects(lambda:adapter.dispatch(pending['run_id'],'read-source',str(project),'pending',state))
+            rejects(lambda:adapter.ticket(admitted['token'],str(project),state))
+            (project/'source.txt').write_text('original')
+            from crews.outcomes import fingerprints
+            writer_cell={**cell,'input_fingerprints':fingerprints(project,['source.txt']),'immutable_input_fingerprints':fingerprints(project,['source.txt'],exclude=['source.txt']),'write_scope':['source.txt']}
+            (project/'source.txt').write_text('writer output')
+            l.validate_delivery(writer_cell,str(project),state,check_writes=False)
+            rejects(lambda:l.validate_delivery(writer_cell,str(project),state))
+            (project/'source.txt').write_text('original')
+            (project/'src').mkdir()
+            (project/'src/input.py').write_text('immutable')
+            (project/'src/output.py').write_text('before')
+            directory_cell={**cell,'input_fingerprints':fingerprints(project,['src']),'immutable_input_fingerprints':fingerprints(project,['src'],exclude=['src/output.py']),'write_scope':['src/output.py']}
+            (project/'src/output.py').unlink()
+            l.validate_delivery(directory_cell,str(project),state,check_writes=False)
+            (project/'src/output.py').write_text('new output')
+            l.validate_delivery(directory_cell,str(project),state,check_writes=False)
+            nested=['src/generated/output.py']
+            nested_cell={**cell,'input_fingerprints':fingerprints(project,['src']),'immutable_input_fingerprints':fingerprints(project,['src'],exclude=nested),'write_scope':nested}
+            (project/'src/generated').mkdir()
+            (project/'src/generated/output.py').write_text('authorized output')
+            l.validate_delivery(nested_cell,str(project),state,check_writes=False)
+            (project/'src/input.py').write_text('changed sibling')
+            rejects(lambda:l.validate_delivery(directory_cell,str(project),state,check_writes=False))
+            call('rollback',rule_id=rule)
+            rejects(lambda:l.validate_delivery(cell,str(project),state))
+            rejects(lambda:adapter.dispatch(pending['run_id'],'read-source',str(project),'pending',state))
+            rejects(lambda:adapter.ticket(admitted['token'],str(project),state))
+            observed=call('observe',role=role,context_fingerprint='record-context',policy_version='version',proposal=proposal,metrics={'source':'teacher'})
+            recorded_role={**execution_role,'classification_evidence':{'outcome':'declared','learning':{'observation_id':observed['observation_id']}}}
+            recorded=adapter.build_plan({'task':'Read original source','roles':[recorded_role]},task_answers('bounded_retrieval',1),str(project),'recorded',state)
+            ticket=adapter.dispatch(recorded['run_id'],'read-source',str(project),'recorded',state)
+            adapter.record(recorded['run_id'],'read-source',{'status':'FAILED','verification':['isolated failure']},str(project),'recorded',state,host_key=ticket['host_key'])
+            observations=call('observations')['observations'];assert next(item for item in observations if item['observation_id']==observed['observation_id'])['metrics']['outcome']=='failed'
+            alias = root / 'alias'
+            try:alias.symlink_to(project,target_is_directory=True)
+            except OSError:pass
+            else:assert l.dispatch({'operation':'status'},str(alias),state)['observations']==6
+            assert not (root/'ambient'/'learning.sqlite').exists()
+        finally:
+            if previous is None:os.environ.pop('CREWS_OMP_HOME',None)
+            else:os.environ['CREWS_OMP_HOME']=previous
+
+
 if __name__ == '__main__':
     check()
+    integration_boundaries()
     print('learning checks passed')

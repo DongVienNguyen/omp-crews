@@ -1,4 +1,4 @@
-"""Exact, user-labelled learning. Task text never leaves transient memory."""
+"""Exact, user-labelled learning; private safety evidence persists only as markers."""
 from __future__ import annotations
 
 import hashlib
@@ -12,7 +12,7 @@ import sqlite3
 import time
 import uuid
 
-from crews.classification import ClassificationFacts, answer_errors, safety_errors, refuse
+from crews.classification import ClassificationFacts, answer_errors, metadata, safety_errors, refuse
 
 MAX_OBSERVATIONS = 10000
 AUDIT_EVERY = 10
@@ -99,23 +99,36 @@ def _digest(key, domain, value):
 def _safe_role(role):
     if not isinstance(role, dict):
         raise ValueError('role: object required')
-    facts = ClassificationFacts.model_validate({} if role.get('facts') is None else role['facts']).model_dump()
-    base = role.get('answers') if role.get('answers') is not None else {}
-    safe = {'kind': role.get('kind'), 'facts': facts, 'classification': role.get('classification', False),
-            'answers': {k: base[k] for k in ('divisible', 'specific') if k in base}}
-    # These fields are classification metadata, never text or authority.
-    if safe['kind'] not in ('produce', 'check', 'integrate', 'research'):
+    if role.get('kind') not in ('produce', 'check', 'integrate', 'research'):
         raise ValueError('kind: valid role kind required')
-    if type(safe['classification']) is not bool:
+    classification = role.get('classification', False)
+    if type(classification) is not bool:
         raise ValueError('classification: boolean required')
-    refuse(answer_errors(safe, require_complete=False))
-    return safe
+    base = role.get('answers') if role.get('answers') is not None else {}
+    full = {**role, 'answers': base}
+    # Validate all input, including declared answers and authority, before stripping.
+    refuse(answer_errors(full, require_complete=False) + safety_errors(full))
+    facts = ClassificationFacts.model_validate({} if role.get('facts') is None else role['facts']).model_dump()
+    details = metadata(role)
+    return {'kind': role['kind'], 'facts': facts, 'classification': classification,
+            'answers': {k: base[k] for k in ('divisible', 'specific') if k in base},
+            'risk': details.risk.model_dump() if details.risk is not None else None,
+            'capability_reason_present': details.capability_reason is not None,
+            'prior_attempt_present': details.prior_attempt is not None,
+            'scope_write_present': bool(role.get('scope'))}
 
 
 def _proposal(safe, proposal, learning_safe=True):
     if not isinstance(proposal, dict) or set(proposal) != {'need', 'difficulty'}:
         raise ValueError('proposal: exactly need and difficulty required')
     effective = {**safe, 'answers': {**safe['answers'], **proposal}}
+    # Presence markers feed only the safety validator, never execution authority.
+    if safe.get('capability_reason_present'):
+        effective['capability_reason'] = 'present'
+    if safe.get('prior_attempt_present'):
+        effective['prior_attempt'] = {'run': 'present', 'role': 'present'}
+    if safe.get('scope_write_present'):
+        effective['scope'] = ['present']
     refuse(answer_errors(effective) + safety_errors(effective))
     if learning_safe and proposal['need'] in CHEAP and any(safe['facts'][k] is not False for k in
                                                           ('unknown_cause', 'consequential_judgment', 'behavior_undecided')):
@@ -131,14 +144,16 @@ def _identity(key, project, role, context_fingerprint, policy_version):
     brief = {k: v for k, v in role.items() if k not in _EXCLUDED}
     declared = {k: role.get('answers', {}).get(k) for k in ('need', 'difficulty') if role.get('answers', {}).get(k) is not None}
     signature = _digest(key, 'family', {'brief': _normalize(brief), 'declared': declared, 'context': context})
-    return _digest(key, 'project', os.path.normcase(os.path.abspath(project))), signature, _digest(key, 'policy', policy), safe
+    return _digest(key, 'project', os.path.normcase(str(Path(project).resolve()))), signature, _digest(key, 'policy', policy), safe
 
 
-def _metrics(metrics):
+def _metrics(metrics, *, task_only=False):
     if metrics is None:
         return {}
     if not isinstance(metrics, dict):
         raise ValueError('metrics: object required')
+    if task_only and metrics.keys() - {'task_latency_ms', 'task_input_tokens', 'task_output_tokens'}:
+        raise ValueError('outcome metrics: only task resource metrics may be updated')
     clean = {}
     for key in ('source', 'outcome'):
         if key in metrics:
@@ -222,11 +237,11 @@ def _receipt(db, ph, project, row):
     wave, cell = found[0]
     if cell.get('policy_combo') != 'Small':
         raise ValueError('feedback requires Small Combo receipt')
-    validate_model(cell, _root())
+    validate_model(cell, Path(db.execute('PRAGMA database_list').fetchone()[2]).parent)
     result = json.loads(row['result'] or '{}')
     native, wire = result.get('native') or {}, result.get('wire') or {}
     evidence = result.get('verification')
-    if (result.get('status') != 'COMPLETE' or result.get('failure_kind') or
+    if (result.get('host_authenticated') is not True or result.get('status') != 'COMPLETE' or result.get('failure_kind') or
             type(native.get('exitCode')) is not int or native['exitCode'] != 0 or
             native.get('error') or native.get('aborted') or
             not isinstance(evidence, list) or not evidence or
@@ -250,6 +265,10 @@ def _receipt(db, ph, project, row):
     if (safe['kind'] != wave['kind'] or safe['facts'] != ClassificationFacts.model_validate(cell.get('facts', {})).model_dump() or
             safe['answers'] != {k: answers[k] for k in ('divisible', 'specific') if k in answers}):
         raise ValueError('feedback observation provenance mismatch')
+    observed_risk=safe.get('risk')
+    current_risk=metadata(cell).risk
+    if observed_risk != (current_risk.model_dump() if current_risk is not None else None):
+        raise ValueError('feedback risk provenance mismatch')
     _proposal(safe, {k: answers.get(k) for k in ('need', 'difficulty')})
     declared = cell.get('declared_role_answers', answers)
     return {'observation_id': oid, 'run': row['run'], 'role': row['role'], 'session': row['session'],
@@ -259,7 +278,7 @@ def _receipt(db, ph, project, row):
 def _feedback_receipts(db, ph, project, p, options=False):
     from crews.omp_adapter import canonical
     project = canonical(project)
-    target = _root() / 'runs.sqlite'
+    target = Path(db.execute('PRAGMA database_list').fetchone()[2]).parent / 'runs.sqlite'
     if not target.is_file():
         if options:
             return []
@@ -331,7 +350,39 @@ def _summary(db, project):
             'states': {r['state']: r['n'] for r in db.execute('SELECT state,count(*) n FROM rules WHERE project=? GROUP BY state', (project,))}}
 
 
-def dispatch(request, project=None):
+def validate_delivery(cell, project, state=None, *, check_writes=True):
+    """Recheck frozen learned context and revocable rule authority before use."""
+    classification = cell.get('classification') or {}
+    if classification.get('outcome') != 'learned':
+        return
+    from crews.outcomes import fingerprints
+    expected = cell.get('input_fingerprints')
+    if not isinstance(expected, dict):
+        raise ValueError('learned classification context missing; create a fresh plan')
+    if not check_writes:
+        expected = cell.get('immutable_input_fingerprints')
+        if not isinstance(expected, dict):
+            raise ValueError('learned immutable context missing; create a fresh plan')
+    actual = fingerprints(project, list(expected), exclude=cell.get('write_scope', []) if not check_writes else ())
+    if actual != expected:
+        raise ValueError('learned classification context stale; create a fresh plan')
+    rid = (classification.get('learning') or {}).get('rule_id')
+    root = Path(state) if state is not None else _root()
+    project = os.path.normcase(str(Path(project).resolve()))
+    key = _key(root)
+    ph = _digest(key, 'project', project)
+    from contextlib import closing
+    with closing(sqlite3.connect((root / 'learning.sqlite').resolve().as_uri() + '?mode=ro', uri=True)) as db:
+        db.row_factory = sqlite3.Row
+        row = _rule(db, ph, rid)
+        if row['state'] != 'active' or _mode(db, ph) != 'on' or row['audit_pending']:
+            raise ValueError('learned classification authority inactive or pending audit')
+        proposal = {k: cell['role_answers'][k] for k in ('need', 'difficulty')}
+        if json.loads(row['answers']) != proposal:
+            raise ValueError('learned classification answers changed')
+
+
+def dispatch(request, project=None, state=None):
     """Bridge API. Only label is ground truth; caller confirms human mutations."""
     if not isinstance(request, dict):
         raise ValueError('learning request: object required')
@@ -339,10 +390,10 @@ def dispatch(request, project=None):
     if op not in {'observe', 'lookup', 'label', 'activate', 'rollback', 'audit', 'outcome', 'status',
                   'report', 'rules', 'observations', 'configure', 'purge', 'feedback', 'feedback_options'}:
         raise ValueError('learning operation: invalid name')
-    project = _text(project if project is not None else request.get('project'), 'project')
-    root = _root()
+    project = str(Path(_text(project if project is not None else request.get('project'), 'project')).resolve())
+    root = Path(state) if state is not None else _root()
     key = _key(root)
-    project_hash = _digest(key, 'project', os.path.normcase(os.path.abspath(project)))
+    project_hash = _digest(key, 'project', os.path.normcase(project))
     db = _connect(root)
     try:
         result = _dispatch(db, key, project, project_hash, op, request)
@@ -455,9 +506,8 @@ def _dispatch(db, key, project, ph, op, p):
         if outcome not in OUTCOMES:
             raise ValueError('outcome: invalid value')
         metrics = json.loads(obs['metrics'])
+        metrics.update(_metrics(p.get('metrics'), task_only=True))
         metrics['outcome'] = outcome
-        if p.get('metrics'):
-            metrics.update(_metrics(p['metrics']))
         db.execute('UPDATE observations SET metrics=? WHERE id=?', (_json(metrics), obs['id']))
         return {'observation_id': obs['id'], 'outcome': outcome, 'label_created': False}
     row = _rule(db, ph, p.get('rule_id'))

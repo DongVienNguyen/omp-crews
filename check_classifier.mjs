@@ -23,5 +23,19 @@ try {
  const cachedAbort=new AbortController();cachedAbort.abort();assert.equal((await c.recommend(role,root,'s','v2',cfg,cachedAbort.signal)).outcome,'requires_classification');
  const abort=new AbortController();abort.abort();assert.equal((await c.recommend(role,root,'s2','v1',cfg,abort.signal)).outcome,'requires_classification');
  let finish;const late=new Classifier(()=>new Promise(resolve=>finish=resolve));const pending=late.recommend(role,root,'s','v1',cfg);late.reload();finish({text:'{"need":"bounded_retrieval","difficulty":1,"reason":"x"}',stopReason:'stop'});assert.equal((await pending).outcome,'requires_classification');
+ fs.mkdirSync(path.join(root,'src'));fs.writeFileSync(path.join(root,'src','a.ts'),'before');
+ const directoryRole={...role,inputs:['src']};
+ await c.recommend(directoryRole,root,'directory','v1',cfg);const beforeDirectory=calls;
+ fs.writeFileSync(path.join(root,'src','a.ts'),'after');await c.recommend(directoryRole,root,'directory','v1',cfg);assert.equal(calls,beforeDirectory+1);
+ fs.writeFileSync(path.join(root,'src','b.ts'),'new');await c.recommend(directoryRole,root,'directory','v1',cfg);assert.equal(calls,beforeDirectory+2);
+ const scopedRole={...role,inputs:[],read_scope:['x.txt']};await c.recommend(scopedRole,root,'scoped','v1',cfg);const beforeReadScope=calls;
+ fs.writeFileSync(path.join(root,'x.txt'),'changed');await c.recommend(scopedRole,root,'scoped','v1',cfg);assert.equal(calls,beforeReadScope+1);
+ let seen;const safetyTeacher=new Classifier(async request=>{seen=request.input;return {text:'{"need":"difficult_review","difficulty":3,"reason":"security verdict"}',stopReason:'stop'};});
+ await safetyTeacher.recommend({...role,risk:{security:true},read_scope:['x.txt'],capability_reason:'hard reasoning'},root,'risk','v1',cfg);
+ assert.equal(seen.risk.security,true);assert.deepEqual(seen.read_scope,['x.txt']);
+ let resolveChanged;const changing=new Classifier(()=>new Promise(resolve=>{resolveChanged=resolve}));
+ const inFlight=changing.recommend(directoryRole,root,'changing','v1',cfg);fs.writeFileSync(path.join(root,'src','a.ts'),'during request');
+ resolveChanged({text:'{"need":"bounded_retrieval","difficulty":1,"reason":"old source"}',stopReason:'stop'});
+ assert.equal((await inFlight).outcome,'requires_classification');
  console.log('PASS: classifier off/cache/context/strict-output/timeout/abort/reload boundaries');
 } finally {fs.rmSync(root,{recursive:true,force:true});}
